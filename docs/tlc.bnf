@@ -1,0 +1,80 @@
+
+program := { vardef | funcdef }
+
+
+vardef := "var" ident [ ":" type ] [ "=" <expr> ] ";"
+
+
+funcdef := "func" ident "(" [ paramdef { "," paramdef } ] ")" [ type ]  ( ";" | block )
+
+paramdef := ident ":" type
+
+
+recorddef := "record" [ "(" qualident ")" ] "{" { fielddef } "}"
+
+fielddef := ident ":" type ","
+
+
+type := ident [ arraydef | "&"]
+
+arraydef := "[" [ integer { "," integer } ] "]"
+
+
+expr := simpleexpr [ relation simpleexpr ]
+
+relation := "==" | "!=" | "<" | "<=" | ">" | ">="
+
+simpleexpr := [ "+" | "-" ] term { addop term }
+
+addop := "+" | "-" | "||"
+
+term := factor { mulop factor }
+
+mulop := "*" | "/" | "%" | "&&"
+
+factor := integer | string | special | designator [ params ] | "(" expr ")" | "~" factor
+
+special := "nil" | "true" | "false"
+
+
+integer := digit {digit} | "0" "x" {hexdigit} | "0" "b" {bindigit}
+
+hexdigit := "A" .. "F" | "a" .. "f" | "0" .. "9"
+
+bindigit := "0" | "1"
+
+digit := "0" .. "9"
+
+
+designator := qualident { selector }
+
+selector := "." ident | "[" explist "]" | "->"
+
+explist := expr { "," expr }
+
+params := "(" explist ")"
+
+
+qualident := [ indent "." ] ident
+
+ident := ( letter | "_" ) | { letter | digit | "_" } 
+
+letter := "A" .. "Z" | "a" .. "z" 
+
+statement := [ assignment | if | while | for | break | return ]
+
+assignment := designator "=" expr ";"
+
+if := "if" expr block { "else" "if" expr block } [ "else" block ]
+
+while := "while" expr block
+
+for := "for" [ expr ] ";" [ expr ] ";" [ expr ] block
+
+break := "break" ";"
+
+return := "return" expr ";"
+
+block := "{" { statement ";" } "}"
+
+
