@@ -1,0 +1,137 @@
+Project Oberon RISC5 Architecture
+---------------------------------
+
+The various documents describing Project Oberon's RISC5 architecture
+are not entirely in agreement with each other, and (maybe most critically)
+not entirely in agreement with the verilog implementation of the CPU
+is RISC.v.  This document attempts to be the "most correct" version,
+looking to the verilog implementation RISC.v as "most authoritative"
+
+0. Processor Resources
+----------------------
+
+Program Counter      PC
+General Registers    R0..R15
+Flag Bits            N C V Z
+Mul/Div Result Reg   H
+Special Irq Reg      SPC      captures NCVZ, PC on IRQ, restores on RTI
+Memory               Mem[]    byte or word addressible main memory
+
+R12 is known as MT, the Module Table pointer (system globals)
+R13 is known as SB, the Static Base pointer (module globals)
+R14 is known as SP, the Stack Pointer
+R15 is known as LNK, the Link Register
+
+The first three are Project Oberon software conventions and have
+no special meaning in hardware.  R15 is where branch-with-link
+instructions store the return address.
+
+1. Register Instructions (F0 & F1)
+----------------------------------
+        4      4       4       4                     4       4
+    +------+-------+-------+-------+-------------+-------+-------+
+F0  | 00u0 |   a   |   b   |  op   |             |  0000 |   c   |
+    +------+-------+-------+-------+-------------+-------+-------+
+    n=Rc
+
+        4      4       4       4                  16
+    +------+-------+-------+-------+-----------------------------+
+F1  | 01uv |   a   |   b   |  op   |               n             |
+    +------+-------+-------+-------+-----------------------------+
+    v=0: 0-extend n,  v=1: 1-extend n
+
+ 0  MOV a, n       Ra = n
+ 1  LSL a, b, n    Ra = Rb << n    (shift left)
+ 2  ASR a, b, n    Ra = Rb >> n    (sight right, sign extending)
+ 3  ROR a, b, n    Ra = Rb rot n   (rotate right)
+ 4  AND a, b, n    Ra = Rb & n     logical operations
+ 5  ANN a, b, n    Ra = Rb & ~n
+ 6  IOR a, b, n    Ra = Rb | n
+ 7  XOR a, b, n    Ra = Rb ^ n
+ 8  ADD a, b, n    Ra = Rb + n     integer arithmetic
+ 9  SUB a, b, n    Ra = Rb - n
+10  MUL a, b, n    Ra = Rb * n     H = result high 32 bits
+11  DIV a, b, n    Ra = Rb / n     H = remainder
+12  FAD a, b, n    Ra = Rb + n     floating point arithmetic
+13  FSB a, b, n    Ra = Rb - n
+14  FML a, b, n    Ra = Rb * n
+15  FDV a, b, n    Ra = Rb / n
+
+    u=1 modifies some ops:
+ 0  MOV a, H       Ra = H                    v=0
+ 0  MOV a, NZCV    Ra = (NZCV<<28)|INFO)     v=1
+ 0  MHI a, n       Ra = n << 16
+ 8  ADC a, b, n    Ra = Rb + n + C
+ 9  SBC a, b, n    Ra = Rb - n - C
+10  UMUL a, b, n   Ra = Rb * n      (unsigned multiply)
+
+INFO is 0x0000053 on the 2018 FPGA RISC5 implementation.
+
+1a. Flag Bits
+-------------
+
+N and Z are set on *any* register write (arithmetic or load)
+
+C and V are set on integer ADD or SUB operations.
+
+
+2. Memory Instructions (F2)
+---------------------------
+        4      4       4                      20
+    +------+-------+-------+-------------------------------------+
+F2  | 10uv |   a   |   b   |                 off                 |
+    +------+-------+-------+-------------------------------------+
+    u=0: load, u=1: store   v=0: word, v=1: byte
+
+    LD a, b, off   Ra = Mem[Rb + off]
+    ST a, b, off   Mem[Rb + off] = Ra
+
+3. Branch Instructions (F3)
+---------------------------
+        4      4                                     4       4
+    +------+-------+-----------------------------+-------+-------+
+F3  | 110v |  cond |                             |  0000 |   c   |
+    +------+-------+-----------------------------+-------+-------+
+        4      4                         24
+    +------+-------+---------------------------------------------+
+F3  | 111v |  cond |                    off                      |
+    +------+-------+---------------------------------------------+
+    v=0: no link,  v=1: link
+
+    B<cond> c       PC = Rc                (low two bits 0'd)
+    BL<cond> c      R15 = PC + 4, PC = Rc  (low two bits 0'd)
+    B<cond> off     PC = PC + 4 + off * 4
+    BL<cond> off    R15 = PC + 4, PC = PC + 4 + off * 4
+
+0000 MI negative (minus) N        1000 PL positive          ~N
+0001 EQ equal (zero)     Z        1001 NE not equal         ~Z
+0010 CS carry set        C        1010 CC carry clear       ~C
+0011 VS overflow set     V        1011 VC overflow clear    ~V
+0100 LS less or same     C|Z      1100 HI high              ~(C|Z)
+0101 LT less than        (N^V)    1101 GE greater or equal  ~(N^V)
+0110 LE less or equal    (N^V)|Z  1110 GT greater than      ~(N^V)|Z
+0111    always           T        1111    never             F
+
+
+4. Interrupts (Special F3 Encodings)
+------------------------------------
+        4      4                                     4       4
+    +------+-------+-----------------------------+-------+-------+
+F3  | 1100 |  0111 |                             |  0001 |  xxxx |
+    +------+-------+-----------------------------+-------+-------+
+    RTI            Return from IRQ, restoring PC and Flags
+
+        4      4                                     4       4
+    +------+-------+-----------------------------+-------+-------+
+F3  | 1100 |  1111 |                             |  0010 |  000e |
+    +------+-------+-----------------------------+-------+-------+
+    STI            set irq enable, allowing irqs  (e=1) 
+    CLI            clear irq enable, masking irqs (e=0)
+
+On interrupt, the flags and PC are saved and execution continues
+at address 0x00000004.
+
+On RTI, the flags and PC are restored.
+
+The H register is neither saved nor restored (MUL/DIV during an
+irq handler is thus unsafe).

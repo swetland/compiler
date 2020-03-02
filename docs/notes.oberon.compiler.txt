@@ -1,0 +1,29 @@
+
+ObjDesc
+  class: byte // Const  Var  Par  Fld  Typ  SProc  SFunc  Mod
+  val: int    // value  adr  adr  off  tda  num    num    key
+              // tda -> type descriptor address
+  exno: byte
+  expo: bool  // exported
+  rdo:  bool  // readonly
+  lev:  int   // ?depth
+  next: Object
+  dsc:  Object
+  type: Type
+  name: Ident
+
+TypeDesc
+  form: int      //       Pointer   Proc    Array  Record
+  dsc:  Object   // list: n/a       params  n/a    fields
+  base: Type     // of:   derefobj  result  elem
+  ref:  int
+  mno:  int
+  len:  int  // arrays: < 0 = open, records adr of descriptor
+  typobj: Object
+  size: int
+
+
+0x'8000'2301
+
+0b'1000'1010'0011'0100
+

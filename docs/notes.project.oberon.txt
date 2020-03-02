@@ -1,0 +1,83 @@
+
+mailing list: http://lists.inf.ethz.ch/pipermail/oberon/
+
+
+sector numbers (from PO.System)
+-------------------------------
+3. Sector pointers are represented by sector numbers of type INTEGER. Actually,
+we use the numbers multiplied by 29. This implies that any single-bit error
+leads to a number which is not a multiple of 29, and hence can easily be
+detected. Thereby the crucial sector addresses are software parity checked and
+are safe (against single-bit errors) even on computers without hardware parity
+check. The check is performed by procedures Kernel.GetSector and
+Kernel.PutSector.
+
+
+traps (from PO.Application)
+---------------------------
+1 array index out of range
+2 type guard failure
+3 array or string copy overflow
+4 access via NIL pointer
+5 illegal procedure call
+6 integer division by zero
+7 assertion violated
+
+handled by BLR MT
+- first word of module table is trap handler entry
+- trap number encoded in bits 4:7 of instruction
+- trap 0 used for proc New (sort of a syscall mechanism)
+
+
+
+
+compiler/ORB.Mod registers builtin funcs, procs, types
+UML, SBC, ADC, ROR, ADR, LSL, LEN, CHR, ORD, FLT, FLOOR, ODD, ABS,
+LED, UNPK, PACK, NEW, ASSERT, EXCL, INCL, DEC, INC,
+SET, BOOLEAN, BYTE, CHAR, LONGREAL, REAL, LONGINT, INTEGER
+
+SYSTEM module setup with:
+H, COND, SIZE, ADR, VAL, REG, BIT,
+LDREG, LDPSR, COPY, PUT, GET
+
+LEN(x)             length of array
+
+SYSTEM module has built-in low-level/unsafe ops
+------------------------------------------------
+v (var), x,a,n (expr)
+
+ADR(v)             INTEGER address of Variable
+SIZE(T)            INTEGER size in bytes of Type 
+
+VAL(T, n)          raw cast n to T if SIZE(n) <= SIZE(T)
+ADC(m, n)          add w/ carry C
+SBC(m, n)          sub w/ carry C
+UML(m, n)          unsigned mul
+COND(n)            IF Cond(n) Then... ?  set cc?
+
+LED(n)             display on LEDs
+
+BIT(a, n)          BOOLEAN bit n of mem[a]
+GET(a, v)          v := mem[a]
+PUT(a, x)          mem[a] := x
+COPY(src, dst, n)  memcpy(dst, src, n * sizeof(WORD))
+
+|> maybe split to builtin.* and unsafe.*
+
+
+
+core/Display.Mod
+----------------
+(*a pattern is an array of bytes; the first is its width (< 32), the second its height, the rest the raster*)
+arrow := SYSTEM.ADR($0F0F 0060 0070 0038 001C 000E 0007 8003 C101 E300 7700 3F00 1F00 3F00 7F00 FF00$);
+
+
+joerg.straube on mailing list
+--------------------
+You can ask the RISC processor to reveal its version with this code
+
+   cpu := SYSTEM.H(2019) MOD 80H;
+   IF cpu = 53H THEN       (* RISC5: with interrupts + floating-point, 31.8.2018 *)
+   ELSIF cpu = 54H THEN (* RISC5a: no interrupts, no floating-point, 1.9.2018*)
+   ELSIF cpu = A0H THEN (* RISC0, 26.12.2013 *)
+   END;
