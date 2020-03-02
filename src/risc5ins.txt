@@ -1,0 +1,33 @@
+# Copyright 2020, Brian Swetland <swetland@frotz.net>
+# Licensed under the Apache License, Version 2.0.
+
+0000aaaa----0000------------cccc mov %a, c
+0010aaaa----0000---------------- mov %a, h
+0011aaaa----0000---------------- mov %a, nzcv
+0010aaaabbbb1000------------cccc adc %a, %b, %c
+0010aaaabbbb1001------------cccc sbc %a, %b, %c
+0010aaaabbbb1010------------cccc uml %a, %b, %c
+0000aaaabbbboooo------------cccc %o %a, %b, %c
+0100aaaa----0000nnnnnnnnnnnnnnnn mov %a, %n
+0101aaaa----0000nnnnnnnnnnnnnnnn mov %a, %s
+0100aaaabbbboooonnnnnnnnnnnnnnnn %o %a, %b, %n
+0101aaaabbbboooossssssssssssssss %o %a, %b, %s
+0110aaaa----0000NNNNNNNNNNNNNNNN mhi %a, %N
+0111aaaa----0000NNNNNNNNNNNNNNNN mhi %a, %N
+0110aaaabbbb1000nnnnnnnnnnnnnnnn adc %a, %b, %n
+0111aaaabbbb1000ssssssssssssssss adc %a, %b, %s
+0110aaaabbbb1001nnnnnnnnnnnnnnnn sbc %a, %b, %n
+0111aaaabbbb1001ssssssssssssssss sbc %a, %b, %s
+0110aaaabbbb1010nnnnnnnnnnnnnnnn uml %a, %b, %n
+0111aaaabbbb1010ssssssssssssssss uml %%a, %b, %s
+1000aaaabbbbmmmmmmmmmmmmmmmmmmmm lw %a, [%b, %m]
+1001aaaabbbbmmmmmmmmmmmmmmmmmmmm lb %a, [%b, %m]
+1010aaaabbbbmmmmmmmmmmmmmmmmmmmm sw %a, [%b, %m]
+1011aaaabbbbmmmmmmmmmmmmmmmmmmmm sb %a, [%b, %m]
+11000111-------------------1---- rti
+11001111------------------1----0 sti
+11001111------------------1----1 cli
+1100CCCC--------------------cccc b%C %c
+1101CCCC--------------------cccc bl%C %c
+1110CCCCBBBBBBBBBBBBBBBBBBBBBBBB b%C %B
+1111CCCCBBBBBBBBBBBBBBBBBBBBBBBB bl%C %B
