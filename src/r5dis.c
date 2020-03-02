@@ -6,6 +6,7 @@
 #include <stdint.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <string.h>
 
 static const char* opname[16] = {
 	"MOV", "LSL", "ASR", "ROR", "AND", "ANN", "IOR", "XOR",
@@ -187,7 +188,7 @@ int main(int argc, char** argv) {
 
 	uint32_t count;
 	count = strlen(argv[1]);
-	if ((count > 5) && (!strcmp(argv + count - 4, ".rsc"))) {
+	if ((count > 5) && (!strcmp(argv[1] + count - 4, ".rsc"))) {
 		count = dishdr(fd);
 	} else {
 		count = 0xffffffff;
