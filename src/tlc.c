@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <stdarg.h>
 #include <stdint.h>
+#include <stdbool.h>
 #include <strings.h>
 #include <string.h>
 
@@ -13,6 +14,8 @@
 #include <sys/stat.h>
 
 #define FNMAXARGS 8
+
+#define nil 0
 
 typedef uint32_t u32;
 typedef int32_t i32;
@@ -44,17 +47,15 @@ char *tnames[] = {
 
 
 typedef struct StringRec* String;
-typedef struct SymbolRec* Symbol;
-typedef struct ScopeRec* Scope;
+typedef struct ObjectRec* Object;
 typedef struct TypeRec* Type;
-typedef struct FuncRec* Func;
+typedef struct ItemRec* Item;
 typedef struct CtxRec* Ctx;
 
 typedef struct StringRec StringRec;
-typedef struct SymbolRec SymbolRec;
-typedef struct ScopeRec ScopeRec;
+typedef struct ObjectRec ObjectRec;
 typedef struct TypeRec TypeRec;
-typedef struct FuncRec FuncRec;
+typedef struct ItemRec ItemRec;
 typedef struct CtxRec CtxRec;
 
 struct StringRec {
@@ -63,16 +64,82 @@ struct StringRec {
 	char text[0];
 };
 
-#define TF_INTEGER 0x01
-#define TF_SIGNED  0x02
-#define TF_VOID    0x04
+// ------------------------------------------------------------------
+
+struct ObjectRec {
+	u32 kind;
+	u32 flags;
+	u32 value;
+	Object next;  // link in list
+	Object first; // list of...
+	Type type;
+	String name;
+};
+
+// Object Kind IDs
+enum {
+	oConst,
+	oVar,
+	oParam,
+	oField,
+	oType,
+};
+
+// Object Flags
+#define ofReadOnly 1
+#define ofPublic   2 
+#define ofDefined  4
+
+// ------------------------------------------------------------------
 
 struct TypeRec {
-	Type next;
-	String name;
-	u32 flags;
-	u32 width;
+	u32 kind;
+	Object obj;   // if we're non-anonymous
+	Object first; // list of Params or Fields
+	Type base;    // Pointer-to, Func-return, or Array-elem
+	u32 len;      // of Array
+	u32 size;     // of Type in Memory
 };
+
+// Type Kind IDs
+enum {
+	tVoid,
+	tByte,
+	tBool,
+	tInt32,
+	tNil,
+	tString,
+	tPointer,
+	tArray,
+	rRecord,
+	tFunc,
+};
+
+// ------------------------------------------------------------------
+
+struct ItemRec {
+	u32 kind;
+	u32 flags;
+	Type type;
+	u32 r;
+	u32 a;
+	u32 b;
+};
+
+// Item Kind IDs
+enum {           // r       a         b
+	iConst,  // -       value     -
+	iVar,    // base    offset
+	iParam,  // -       offset0   offset1
+	iReg,    // regno
+	iRegInd, // regno   offset
+	iCond,   // ccode   f-chain   t-chain
+};
+
+// Item Flags
+#define ifReadOnly 1
+
+// ------------------------------------------------------------------
 
 struct CtxRec {
 	const char* source;    // entire source file
@@ -86,42 +153,18 @@ struct CtxRec {
 	char tmp[256];         // used for tNAME, tTYPE, tNUMBER, tSTRING;
 
 	String strtab;         // TODO: hashtable
-	Type typetab;       // TODO: hashtable
-	Symbol symtab;      // TODO: hashtable, globals
-	Scope scope;
+	Object typetab;        // TODO: hashtable
+	Object symtab;         // TODO: hashtable, globals
+	Object scope;
 
 	Type type_void;
-	Type type_i32;
-	Type type_u32;
+	Type type_byte;
+	Type type_bool;
+	Type type_int32;
+	Type type_nil;
+	Type type_string;
 };
 
-struct ScopeRec {
-	Scope next;
-	Symbol first;
-};
-
-#define SF_REGISTER   0x01
-#define SF_FRAMEREL   0x02
-#define SF_GLOBAL     0x04 // global variable
-#define SF_FUNC       0x08 // function 
-#define SF_DEFINED    0x10 // defined, not just declared (function)
-
-struct SymbolRec {
-	Symbol next;
-	String name;
-	Type type;
-	u32 flags;
-	i32 posn;
-	i32 regno;
-	Func func;
-};
-
-struct FuncRec {
-	ScopeRec scope;
-	u32 pcount;
-	Type type;      // return type
-	SymbolRec param[0];
-};
 
 String mkstring(Ctx ctx, const char* text, unsigned len) {
 	String str;
@@ -142,23 +185,67 @@ String mkstring(Ctx ctx, const char* text, unsigned len) {
 	return str;
 }
 
-Type mktype(Ctx ctx, const char* text, unsigned len, unsigned flags, unsigned width) {
+Type mktype(Ctx ctx, const char* text, u32 len, u32 kind, u32 size) {
 	String str = mkstring(ctx, text, len);
 	Type type = malloc(sizeof(TypeRec));
-	type->name = str;
-	type->width = width;
-	type->next = ctx->typetab;
-	ctx->typetab = type;
+	Object obj = malloc(sizeof(ObjectRec));
+
+	type->kind = kind;
+	type->obj = obj;
+	type->first = nil;
+	type->base = nil;
+	type->len = 0;
+	type->size = size;
+
+	obj->kind = oType;
+	obj->flags = 0;
+	obj->value = 0;
+	obj->next = nil;
+	obj->first = nil;
+	obj->type = type;
+	obj->name = str;
+
+	obj->next = ctx->typetab;
+	ctx->typetab = obj;
+
 	return type;
 }
 
 void init_ctx(Ctx ctx) {
 	memset(ctx, 0, sizeof(CtxRec));
 
-	// install built-in plain types
-	ctx->type_void = mktype(ctx, "void", 4, TF_VOID, 0);
-	ctx->type_i32 = mktype(ctx, "i32",  3, TF_INTEGER | TF_SIGNED, 4);
-	ctx->type_u32 = mktype(ctx, "u32",  3, TF_SIGNED, 4);
+	// install built-in basic types
+	ctx->type_void    = mktype(ctx, "void", 4, tVoid, 0);
+	ctx->type_byte    = mktype(ctx, "byte", 4, tByte, 1);
+	ctx->type_bool    = mktype(ctx, "bool", 4, tBool, 1);
+	ctx->type_int32   = mktype(ctx, "i32",  3, tInt32, 4);
+	ctx->type_nil     = mktype(ctx, "nil",  3, tNil, 4);
+	ctx->type_string  = mktype(ctx, "str",  3, tString, 8);
+}
+
+bool sametype(Type a, Type b) {
+	if (a->kind != b->kind) {
+		return false;
+	}
+	if (a->base != b->base) {
+		return false;
+	}
+	if (a->len != b->len) {
+		return false;
+	}
+	Object a1 = a->first;
+	Object b1 = b->first;
+	while ((a1 != nil) && (b1 != nil)) {
+		// check that parameters and fields match
+		if (!sametype(a1->type, b1->type)) {
+			return false;
+		}
+	}
+	if ((a1 != nil) || (b1 != nil)) {
+		// mismatched number of parameters or fields
+		return false;
+	}
+	return true;
 }
 
 void error(Ctx ctx, const char *fmt, ...) {
@@ -462,22 +549,50 @@ String parse_name(Ctx ctx, const char* what) {
 
 Type parse_type(Ctx ctx) {
 	String tname = parse_name(ctx, "type name");
-	for (Type type = ctx->typetab; type != NULL; type = type->next) {
-		if (type->name == tname) {
-			return type;
+	for (Object obj = ctx->typetab; obj != nil; obj = obj->next) {
+		if (obj->name == tname) {
+			return obj->type;
 		}
 	}
 	error(ctx, "unknown type name '%s'", tname->text);
-	return NULL;
+	return nil;
 }
 
 void parse_function_body(Ctx ctx) {
 	error(ctx, "unsupported");
 }
 
+Object parse_param(Ctx ctx, String fname, u32 n, Object first, Object last) {
+	if (n == FNMAXARGS) {
+		error(ctx, "too many parameters (%d) for '%s'", FNMAXARGS, fname->text);
+	}
+	Object param = malloc(sizeof(ObjectRec));
+	param->kind = oParam;
+	param->flags = 0;
+	param->value = n;
+	param->next = nil;
+	param->first = nil;
+	param->name = parse_name(ctx, "parameter name");
+	param->type = parse_type(ctx);
+
+	Object obj = first;
+	while (obj != nil) {
+		if (obj->name == param->name) {
+			error(ctx, "duplicate parameter name '%s'", fname->text);
+		}
+		obj = obj->next;
+	}
+
+	if (last != nil) {
+		last->next = param;
+	}
+	return param;
+}
+
 void parse_function(Ctx ctx) {
-	SymbolRec param[FNMAXARGS];
-	unsigned n = 0;
+	Object first = nil;
+	Object last = nil;
+	u32 n = 0;
 	String fname = parse_name(ctx, "funcion name");
 	Type ftype = ctx->type_void;
 
@@ -485,32 +600,13 @@ void parse_function(Ctx ctx) {
 
 	// process parameters
 	if (ctx->tok != tCPAREN) {
-		for (;;) {
-			if (n == FNMAXARGS) {
-				error(ctx, "too many parameters (%d)", FNMAXARGS);
-			}
-
-			String name = parse_name(ctx, "parameter name");
-			Type type = parse_type(ctx);
-
-			for (unsigned i = 0; i < n; i++) {
-				if (param[i].name == name) {
-					error(ctx, "duplicate parameter name '%s'", name->text);
-				}
-			}
-
-			param[n].name = name;
-			param[n].type = type;
-			param[n].flags = SF_FRAMEREL;
-			param[n].posn = -4 * (n + 1);
-			param[n].regno = 0;
-			param[n].next = NULL;
-			n++;
-
-			if (ctx->tok != tCOMMA) {
-				break;
-			}
+		first = parse_param(ctx, fname, n, nil, nil);
+		last = first;
+		n++;
+		while (ctx->tok == tCOMMA) {
 			next(ctx, 0);
+			last = parse_param(ctx, fname, n, first, last);
+			n++;
 		}
 	}
 
@@ -534,62 +630,66 @@ void parse_function(Ctx ctx) {
 
 	// Look for an existing declaration or definintion of this function
 	// and if it exists, ensure that we are in argeement with it
-	Symbol sym;
-	for (sym = ctx->symtab; sym != NULL; sym = sym->next) {
-		if (sym->name == fname) {
-			if (!(sym->flags & SF_FUNC)) {
-				error(ctx, "redefining variable as function '%s'", fname->text);
+	Object obj = ctx->symtab;
+	while (obj != nil) {
+		if (obj->name == fname) {
+			if (obj->type->kind != tFunc) {
+				error(ctx, "redefining '%s' as function", fname->text);
 			}
 			if (!isdef) {
 				error(ctx, "redeclared function '%s'", fname->text);
 			}
-			if (sym->flags & SF_DEFINED) {
+			if (obj->flags & ofDefined) {
 				error(ctx, "redefined function '%s'", fname->text);
 			}
-			int bad = 0;
-			if (n != sym->func->pcount) {
-				bad = 1;
-			} else if (ftype != sym->func->type) {
-				bad = 1;
-			} else {
-				for (unsigned i = 0; i < n; i++) {
-					if (sym->func->param[i].type != param[i].type) {
-						bad = 1;
-						break;
-					}
-				}
+			if (ftype != obj->type->base) {
+				error(ctx, "function definition mismatch for '%s' (return type)", fname->text);
 			}
-			if (bad) {
-				error(ctx, "function declaration/definition mismatch for '%s'", fname->text);
+			Object pa = first;
+			Object pb = obj->type->first;
+			u32 i = 1;
+			while ((pa != nil) && (pb != nil)) {
+				if (!sametype(pa->type, pb->type)) {
+					error(ctx, "function definition mismatch for '%s' (parameter #%u)", fname->text, i);
+				}
+				pa = pa->next;
+				pb = pb->next;
+			}
+			if ((pa != nil) || (pb != nil)) {
+				error(ctx, "function definition mismatch for '%s' (parameter count mismatch)", fname->text);
 			}
 			break;
 		}
+		obj = obj->next;
 	}
 
 	// if there was no existing record of this function, create one now
-	if (sym == NULL) {
-		Func func = malloc(sizeof(FuncRec) + sizeof(SymbolRec) * n);
-		func->scope.next = NULL;
-		func->scope.first = NULL;
-		func->type = ftype;
-		func->pcount = n;
-		memcpy(func->param, param, sizeof(SymbolRec) * n);
-		
-		sym = malloc(sizeof(SymbolRec));
-		sym->name = fname;
-		sym->type = NULL;
-		sym->flags = SF_FUNC;
-		sym->posn = 0;
-		sym->regno = 0;
-		sym->func = func;
+	if (obj == nil) {
+		Type type = malloc(sizeof(TypeRec));
+		obj = malloc(sizeof(ObjectRec));
 
-		sym->next = ctx->symtab;
-		ctx->symtab = sym;
+		type->kind = tFunc;
+		type->obj = obj;
+		type->first = first;
+		type->base = ftype;
+		type->len = 0;
+		type->size = 0;
+
+		obj->kind = oType; //??
+		obj->flags = 0;
+		obj->value = 0;
+		obj->next = nil;
+		obj->first = first;
+		obj->type = type;
+		obj->name = fname;
+
+		obj->next = ctx->symtab;
+		ctx->symtab = obj;
 	}
 
 	// handle definition if it is one
 	if (isdef) {
-		sym->flags |= SF_DEFINED;
+		obj->flags |= ofDefined;
 		parse_function_body(ctx);
 	}
 }
