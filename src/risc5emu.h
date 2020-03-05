@@ -1,9 +1,10 @@
 
 #include <stdint.h>
+#include <stdbool.h>
 
 typedef struct RISC risc_t;
 
-struct RISC *risc_new();
+struct RISC *risc_new(bool trace);
 
 void risc_reset(struct RISC *risc);
 void risc_run(struct RISC *risc, int cycles);

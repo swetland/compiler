@@ -48,6 +48,7 @@ struct RISC {
 
   uint32_t *RAM;
   uint32_t mem_size;
+  bool TRACE;
 };
 
 enum {
@@ -60,10 +61,11 @@ enum {
 static uint32_t risc_load_io(struct RISC *risc, uint32_t address);
 static void risc_store_io(struct RISC *risc, uint32_t address, uint32_t value);
 
-struct RISC *risc_new() {
+struct RISC *risc_new(bool trace) {
   struct RISC *risc = calloc(1, sizeof(*risc));
   risc->mem_size = DefaultMemSize;
   risc->RAM = calloc(1, risc->mem_size);
+  risc->TRACE = trace;
   risc_reset(risc);
   return risc;
 }
@@ -92,7 +94,7 @@ void risc_single_step(struct RISC *risc) {
     return;
   }
 
-  disasm(risc->PC << 2, ir); 
+  if (risc->TRACE) disasm(risc->PC << 2, ir); 
   risc->PC++;
 
   const uint32_t pbit = 0x80000000;
@@ -289,7 +291,7 @@ void risc_single_step(struct RISC *risc) {
 }
 
 void risc_set_register(struct RISC *risc, int reg, uint32_t value) {
-  printf("                    R%d = 0x%08x\n", reg, value);
+  if (risc->TRACE) printf("                    R%d = 0x%08x\n", reg, value);
   risc->R[reg] = value;
   risc->Z = value == 0;
   risc->N = (int32_t)value < 0;
@@ -310,7 +312,7 @@ uint8_t risc_load_byte(struct RISC *risc, uint32_t address) {
 
 void risc_store_word(struct RISC *risc, uint32_t address, uint32_t value) {
   if (address < risc->mem_size) {
-    printf("                    mem@ 0x%08x = 0x%08x\n", address, value);
+    if (risc->TRACE) printf("                    mem@ 0x%08x = 0x%08x\n", address, value);
     risc->RAM[address/4] = value;
   } else {
     risc_store_io(risc, address, value);
@@ -334,11 +336,15 @@ static uint32_t risc_load_io(struct RISC *risc, uint32_t address) {
 }
 
 static void risc_store_io(struct RISC *risc, uint32_t address, uint32_t value) {
-  printf("                    io@ 0x%08x = 0x%08x\n", address, value);
+  if (risc->TRACE) printf("                    io@ 0x%08x = 0x%08x\n", address, value);
   switch (address - IOStart) {
   case 0x100: {
-    unsigned char x = value;
-    write(1, &x, 1);
+    printf("%08x\nEXIT\n", value);
+    exit(0);
+    break;
+  case 0x104:
+    printf("%08x\n", value);
+    break;
   }
   }
 }
