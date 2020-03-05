@@ -28,7 +28,7 @@ typedef enum {
 	tAND, tOR, tEQ, tGT, tLT, tGE, tLE, tNE,
 	tINCR, tDECR,
 	tVAR, tSTRUCT, tFUNC, tRETURN, tIF, tELSE,
-	tWHILE, tFOR, tBREAK, tSWITCH, tCASE,
+	tWHILE, tFOR, tBREAK, tCONTINUE, tSWITCH, tCASE,
 	tNAME, tNUMBER, tSTRING,
 	NUMTOKENS,
 } token_t;
@@ -146,15 +146,16 @@ struct CtxRec {
 	const char* sptr;      // tokenizer source pointer
 	const char* line;      // start of most recent line
 	const char* filename;  // filename of active source
-	unsigned linenumber;   // line number of most recent line
+	u32 linenumber;        // line number of most recent line
+	u32 flags;
 
 	token_t tok;           // most recent token
-	unsigned num;
+	u32 num;
 	char tmp[256];         // used for tNAME, tTYPE, tNUMBER, tSTRING;
 
 	String strtab;         // TODO: hashtable
 	Object typetab;        // TODO: hashtable
-	Object symtab;         // TODO: hashtable, globals
+	Object symtab;         // TODO: hashtable, globals, functions
 	Object scope;
 
 	Type type_void;
@@ -166,13 +167,13 @@ struct CtxRec {
 };
 
 
-String mkstring(Ctx ctx, const char* text, unsigned len) {
-	String str;
-
-	for (str = ctx->strtab; str != NULL; str = str->next) {
+String mkstring(Ctx ctx, const char* text, u32 len) {
+	String str = ctx->strtab;
+	while (str != nil) {
 		if ((str->len == len) && (memcmp(text, str->text, len) == 0)) {
 			return str;
 		}
+		str = str->next;
 	}
 
 	str = malloc(sizeof(StringRec) + len + 1);
@@ -251,7 +252,7 @@ bool sametype(Type a, Type b) {
 void error(Ctx ctx, const char *fmt, ...) {
 	va_list ap;
 
-	unsigned len = 0;
+	u32 len = 0;
 	const char *s = ctx->line;
 	while (len < 255) {
 		if ((*s < ' ') && (*s != 9)) break;
@@ -292,7 +293,7 @@ void load(Ctx ctx, const char* filename) {
 	ctx->linenumber = 1;
 }
 
-int unhex(unsigned ch) {
+int unhex(u32 ch) {
 	switch (ch) {
 	case '0' ... '9': return ch - '0';
 	case 'a' ... 'f': return ch - 'a' + 10;
@@ -302,8 +303,8 @@ int unhex(unsigned ch) {
 }
 
 token_t next_string(Ctx ctx, const char* s) {
-	unsigned ch, len = 0;
-	for (;;) {
+	u32 ch, len = 0;
+	while (true) {
 		switch ((ch = *s++)) {
 		case 0: error(ctx, "unterminated string");
 		case '"': goto done;
@@ -347,7 +348,7 @@ token_t next_num(Ctx ctx, u32 n, const char* str, size_t len) {
 	return ctx->tok = tNUMBER;
 }
 
-int streq(const char* s1, unsigned l1, const char* s2, unsigned l2) {
+int streq(const char* s1, u32 l1, const char* s2, u32 l2) {
 	return (l1 == l2) && (!memcmp(s1, s2, l1));
 }
 
@@ -379,6 +380,9 @@ token_t next_word(Ctx ctx, const char* str, size_t len) {
 		if (streq(str, len, "struct", 6)) return ctx->tok = tSTRUCT;
 		if (streq(str, len, "return", 6)) return ctx->tok = tRETURN;
 		break;
+	case 8:
+		if (streq(str, len, "continue", 8)) return ctx->tok = tCONTINUE;
+		break;
 	}
 	return ctx->tok = tNAME;
 }
@@ -386,8 +390,8 @@ token_t next_word(Ctx ctx, const char* str, size_t len) {
 #define TOKEN(t) { ctx->sptr++; return ctx->tok = t; }
 #define TOKEN2(t) { ctx->sptr+=2; return ctx->tok = t; }
 
-token_t _next(Ctx ctx, int misc) {
-	for (;;) {
+token_t _next(Ctx ctx) {
+	while (true) {
 		const char* s = ctx->sptr;
 
 		switch (*s) {
@@ -397,7 +401,7 @@ token_t _next(Ctx ctx, int misc) {
 			ctx->linenumber++;
 			ctx->sptr++;
 			ctx->line = ctx->sptr;
-			if (misc) return ctx->tok = tEOL;
+			if (ctx->flags & 1) return ctx->tok = tEOL;
 			continue;
 		case ' ':
 		case '\t':
@@ -488,12 +492,12 @@ token_t _next(Ctx ctx, int misc) {
 	}
 }
 
-token_t next(Ctx ctx, int misc) {
-	return (ctx->tok = _next(ctx, misc));
+token_t next(Ctx ctx) {
+	return (ctx->tok = _next(ctx));
 }
 
 void printstr(const char* s) {
-	unsigned ch;
+	u32 ch;
 	printf("\"");
 	while ((ch = *s++) != 0) {
 		if ((ch < ' ') || (ch > '~')) {
@@ -535,7 +539,7 @@ void expect(Ctx ctx, token_t tok) {
 
 void require(Ctx ctx, token_t tok) {
 	expect(ctx, tok);
-	next(ctx, 0);
+	next(ctx);
 }
 
 String parse_name(Ctx ctx, const char* what) {
@@ -543,16 +547,18 @@ String parse_name(Ctx ctx, const char* what) {
 		error(ctx, "expected %s, found %s", what, tnames[ctx->tok]);
 	}
 	String str = mkstring(ctx, ctx->tmp, strlen(ctx->tmp));
-	next(ctx, 0);
+	next(ctx);
 	return str;
 }
 
 Type parse_type(Ctx ctx) {
 	String tname = parse_name(ctx, "type name");
-	for (Object obj = ctx->typetab; obj != nil; obj = obj->next) {
+	Object obj = ctx->typetab;
+	while (obj != nil) {
 		if (obj->name == tname) {
 			return obj->type;
 		}
+		obj = obj->next;
 	}
 	error(ctx, "unknown type name '%s'", tname->text);
 	return nil;
@@ -604,7 +610,7 @@ void parse_function(Ctx ctx) {
 		last = first;
 		n++;
 		while (ctx->tok == tCOMMA) {
-			next(ctx, 0);
+			next(ctx);
 			last = parse_param(ctx, fname, n, first, last);
 			n++;
 		}
@@ -619,10 +625,10 @@ void parse_function(Ctx ctx) {
 	int isdef = 0;
 	if (ctx->tok == tSEMI) {
 		// declaration
-		next(ctx, 0);
+		next(ctx);
 	} else if (ctx->tok == tOBRACE) {
 		// definition
-		next(ctx, 0);
+		next(ctx);
 		isdef = 1;
 	} else {
 		expected(ctx, "semi or open brace");
@@ -699,15 +705,15 @@ void parse_global_var(Ctx ctx) {
 }
 
 void parse_program(Ctx ctx) {
-	next(ctx, 0);
+	next(ctx);
 	for (;;) {
 		switch (ctx->tok) {
 		case tFUNC:
-			next(ctx, 0);
+			next(ctx);
 			parse_function(ctx);
 			break;
 		case tVAR:
-			next(ctx, 0);
+			next(ctx);
 			parse_global_var(ctx);
 			break;
 		case tEOF:
@@ -738,8 +744,9 @@ int main(int argc, char **argv) {
 	ctx.linenumber = 1;
 
 #if 0
+	ctx->flags |= 1;
 	do {
-		next(&ctx, 1);
+		next(&ctx);
 		print(&ctx);
 	} while (ctx.tok != tEOF);
 	printf("\n");
