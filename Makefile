@@ -7,15 +7,15 @@ clean:
 CFLAGS := -Wall -O2 -g
 CC := gcc
 
-bin/tlc: src/tlc.c
+bin/tlc: src/tlc.c src/risc5dis.c out/risc5ins.h
 	@mkdir -p bin
-	$(CC) -o $@ $(CFLAGS) src/tlc.c
+	$(CC) -o $@ $(CFLAGS) src/tlc.c src/risc5dis.c
 
 bin/fs: src/fs.c src/fs.h
 	@mkdir -p bin
 	$(CC) -o $@ $(CFLAGS) src/fs.c
 
-bin/r5d: src/r5d.c src/risc5dis.c
+bin/r5d: src/r5d.c src/risc5dis.c out/risc5ins.h
 	@mkdir -p bin
 	$(CC) -o $@ $(CFLAGS) src/r5d.c src/risc5dis.c
 
@@ -30,10 +30,4 @@ bin/mkinstab: src/mkinstab.c
 out/risc5ins.h: src/risc5ins.txt bin/mkinstab
 	@mkdir -p out
 	bin/mkinstab < src/risc5ins.txt > $@
-
-src/risc5dis.c: src/risc5.h out/risc5ins.h
-src/risc5emu.c: src/risc5emu.h src/risc5.h
-src/risc5emu-fp.c: src/risc5emu-fp.h
-src/r5d.c: src/risc5.h
-src/r5e.c: src/risc5emu.h
 

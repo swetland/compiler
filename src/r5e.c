@@ -9,7 +9,7 @@ uint32_t data[] = {
 	0x4000FFD2, // mov r0, 0xFFD2
 	0x51000100, // mov r1, 0xffff0100
 	0xA0100000, // sw r0, [r1, 0]
-	0xE7FFFFFE, // b -3
+	0xE7FFFFFF, // b -1
 };
 
 int main(int argc, char** argv) {

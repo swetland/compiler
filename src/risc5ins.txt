@@ -20,10 +20,10 @@
 0111aaaabbbb1001ssssssssssssssss sbc %a, %b, %s
 0110aaaabbbb1010nnnnnnnnnnnnnnnn uml %a, %b, %n
 0111aaaabbbb1010ssssssssssssssss uml %%a, %b, %s
-1000aaaabbbbmmmmmmmmmmmmmmmmmmmm lw %a, [%b, %m]
-1001aaaabbbbmmmmmmmmmmmmmmmmmmmm lb %a, [%b, %m]
-1010aaaabbbbmmmmmmmmmmmmmmmmmmmm sw %a, [%b, %m]
-1011aaaabbbbmmmmmmmmmmmmmmmmmmmm sb %a, [%b, %m]
+1000aaaabbbbmmmmmmmmmmmmmmmmmmmm ldw %a, [%b, %m]
+1001aaaabbbbmmmmmmmmmmmmmmmmmmmm ldb %a, [%b, %m]
+1010aaaabbbbmmmmmmmmmmmmmmmmmmmm stw %a, [%b, %m]
+1011aaaabbbbmmmmmmmmmmmmmmmmmmmm stb %a, [%b, %m]
 11000111-------------------1---- rti
 11001111------------------1----0 sti
 11001111------------------1----1 cli

@@ -1,4 +1,4 @@
-// Copyright 2020, Brian Swetland <swetland@frotz.net>
+// Copyright 2020, Brian Swetland <swetland@frotz.net>
 // Licensed under the Apache License, Version 2.0.
 
 #include <stdio.h>
@@ -24,11 +24,14 @@ typedef enum {
 	tEOF, tEOL,
 	tDOT, tCOMMA, tCOLON, tSEMI, tBANG, tOBRACK, tCBRACK,
 	tOPAREN, tCPAREN, tOBRACE, tCBRACE, tASSIGN,
-	tPLUS, tMINUS, tSTAR, tSLASH, tAMP, tPIPE, tCARET,
-	tAND, tOR, tEQ, tGT, tLT, tGE, tLE, tNE,
+	tPLUS, tMINUS, tSTAR, tSLASH, tPERCENT, tAMP, tPIPE, tCARET,
+	tAND, tOR,
+	// comparisons (keep EQ/NE first/last)
+	tEQ, tGT, tGE, tLT, tLE, tNE,
 	tINCR, tDECR,
 	tVAR, tSTRUCT, tFUNC, tRETURN, tIF, tELSE,
 	tWHILE, tFOR, tBREAK, tCONTINUE, tSWITCH, tCASE,
+	tTRUE, tFALSE, tNIL,
 	tNAME, tNUMBER, tSTRING,
 	NUMTOKENS,
 } token_t;
@@ -37,11 +40,13 @@ char *tnames[] = {
 	"<EOF>", "<EOL>", 
 	".", ",", ":", ";", "!", "[", "]",
 	"(", ")","{", "}", "=",
-	"+", "-", "*", "/", "&", "|", "^",
-	"&&", "||", "==", ">", "<", ">=", "<=", "!=",
+	"+", "-", "*", "/", "%", "&", "|", "^",
+	"&&", "||",
+	"==", ">", ">=", "<", "<=", "!=",
 	"++", "--",
 	"var", "struct", "func", "return", "if", "else",
 	"while", "for", "break", "switch", "case", 
+	"true", "false", "nil",
 	"<NAME>", "<NUMBER>", "<STRING>",
 };
 
@@ -77,12 +82,15 @@ struct ObjectRec {
 };
 
 // Object Kind IDs
-enum {
-	oConst,
-	oVar,
-	oParam,
-	oField,
-	oType,
+enum {           // value
+	oConst,  // const value
+	oGlobal, // global offset
+	oVar,    // frame offset
+	oParam,  // frame offset
+	oField,  // record offset
+	oType,   // type-desc-ptr
+	oFunc,   // address
+	oScope,  // scope depth
 };
 
 // Object Flags
@@ -97,7 +105,7 @@ struct TypeRec {
 	Object obj;   // if we're non-anonymous
 	Object first; // list of Params or Fields
 	Type base;    // Pointer-to, Func-return, or Array-elem
-	u32 len;      // of Array
+	u32 len;      // of Array, num of Params
 	u32 size;     // of Type in Memory
 };
 
@@ -164,8 +172,18 @@ struct CtxRec {
 	Type type_int32;
 	Type type_nil;
 	Type type_string;
+
+	u32 code[8192];
+	u32 pc;
+
+	u32 regbits;
+
+	u32 xref[8192];
 };
 
+void gen_prologue(Ctx ctx, Object fn);
+void gen_epilogue(Ctx ctx, Object fn);
+void gen_return(Ctx ctx, Item x);
 
 String mkstring(Ctx ctx, const char* text, u32 len) {
 	String str = ctx->strtab;
@@ -365,15 +383,18 @@ token_t next_word(Ctx ctx, const char* str, size_t len) {
 	case 3:
 		if (streq(str, len, "for", 3)) return ctx->tok = tFOR;
 		if (streq(str, len, "var", 3)) return ctx->tok = tVAR;
+		if (streq(str, len, "nil", 3)) return ctx->tok = tNIL;
 		break;
 	case 4:
 		if (streq(str, len, "case", 4)) return ctx->tok = tCASE;
 		if (streq(str, len, "func", 4)) return ctx->tok = tFUNC;
 		if (streq(str, len, "else", 4)) return ctx->tok = tELSE;
+		if (streq(str, len, "true", 4)) return ctx->tok = tTRUE;
 		break;
 	case 5:
 		if (streq(str, len, "break", 5)) return ctx->tok = tBREAK;
 		if (streq(str, len, "while", 5)) return ctx->tok = tWHILE;
+		if (streq(str, len, "false", 5)) return ctx->tok = tFALSE;
 		break;
 	case 6:
 		if (streq(str, len, "switch", 6)) return ctx->tok = tSWITCH;
@@ -401,6 +422,7 @@ token_t _next(Ctx ctx) {
 			ctx->linenumber++;
 			ctx->sptr++;
 			ctx->line = ctx->sptr;
+			ctx->xref[ctx->pc / 4] = ctx->linenumber;
 			if (ctx->flags & 1) return ctx->tok = tEOL;
 			continue;
 		case ' ':
@@ -469,6 +491,7 @@ token_t _next(Ctx ctx) {
 		case '+': if (s[1] == '+') TOKEN2(tINCR) else TOKEN(tPLUS);
 		case '-': if (s[1] == '-') TOKEN2(tDECR) else TOKEN(tMINUS);
 		case '*': TOKEN(tSTAR);
+		case '%': TOKEN(tPERCENT);
 		case '^': TOKEN(tCARET);
 		case '=': if (s[1] == '=') TOKEN2(tEQ) else TOKEN(tASSIGN);
 		case '&': if (s[1] == '&') TOKEN2(tAND) else TOKEN(tAMP);
@@ -542,6 +565,98 @@ void require(Ctx ctx, token_t tok) {
 	next(ctx);
 }
 
+Object find(Ctx ctx, String str) {
+	Object obj = ctx->symtab; // scope?
+	while (obj != nil) {
+		if (obj->name == str) {
+			return obj;
+		}
+	}
+	return nil;
+}
+
+void setitem(Item itm, u32 kind, Type type, u32 r, u32 a, u32 b) {
+	itm->kind = kind;
+	itm->flags = 0;
+	itm->type = type;
+	itm->r = r;
+	itm->a = a;
+	itm->b = b;
+}
+
+// ================================================================
+
+void parse_expr(Ctx ctx, Item x);
+
+void parse_factor(Ctx ctx, Item x) {
+	if (ctx->tok == tNUMBER) {
+		setitem(x, iConst, ctx->type_int32, 0, ctx->num, 0);
+	} else if (ctx->tok == tSTRING) {
+		error(ctx, "unsupported string const");
+	} else if (ctx->tok == tTRUE) {
+		setitem(x, iConst, ctx->type_bool, 0, 1, 0);
+	} else if (ctx->tok == tFALSE) {
+		setitem(x, iConst, ctx->type_bool, 0, 0, 0);
+	} else if (ctx->tok == tNIL) {
+		setitem(x, iConst, ctx->type_nil, 0, 0, 0);
+	} else if (ctx->tok == tOPAREN) {
+		next(ctx);
+		parse_expr(ctx, x);
+		require(ctx, tCPAREN);
+		return;
+	} else if (ctx->tok == tNAME) {
+		String str = mkstring(ctx, ctx->tmp, strlen(ctx->tmp));
+		Object obj = find(ctx, str);
+		if (obj == nil) {
+			error(ctx, "unknown identifier '%s'", str->text);
+		}
+		error(ctx, "unsupported identifier");
+		// .ident .ident ...
+		// [ explist ] (array)
+		// ( explist ) (fncall)
+		// const
+	}
+	next(ctx);
+}
+
+void parse_term(Ctx ctx, Item x) {
+	parse_factor(ctx, x);
+	while ((ctx->tok == tSTAR) || (ctx->tok == tSLASH) || (ctx->tok == tPERCENT) || (ctx->tok == tOR)) {
+		u32 op = ctx->tok;
+		next(ctx);
+		ItemRec y;
+		parse_factor(ctx, &y);
+	}
+}
+
+void parse_simple_expr(Ctx ctx, Item x) {
+	bool negate = false;
+	if (ctx->tok == tPLUS) {
+		next(ctx);
+	} else if (ctx->tok == tMINUS) {
+		negate = true;
+	}
+	parse_term(ctx, x);
+	while ((ctx->tok == tPLUS) || (ctx->tok == tMINUS) || (ctx->tok == tOR)) {
+		u32 op = ctx->tok;
+		next(ctx);
+		ItemRec y;
+		parse_term(ctx, &y);
+	}
+}
+
+void parse_expr(Ctx ctx, Item x) {
+	parse_simple_expr(ctx, x);
+	while ((ctx->tok >= tEQ) && (ctx->tok <= tNE)) {
+		u32 op = ctx->tok;
+		next(ctx);
+		error(ctx, "unsupported relop");
+		ItemRec y;
+		parse_simple_expr(ctx, &y);
+	}
+}
+
+
 String parse_name(Ctx ctx, const char* what) {
 	if (ctx->tok != tNAME) {
 		error(ctx, "expected %s, found %s", what, tnames[ctx->tok]);
@@ -564,8 +679,34 @@ Type parse_type(Ctx ctx) {
 	return nil;
 }
 
-void parse_function_body(Ctx ctx) {
-	error(ctx, "unsupported");
+void parse_function_body(Ctx ctx, Object fn) {
+	gen_prologue(ctx, fn);
+	while (true) {
+		if (ctx->tok == tCBRACE) {
+			next(ctx);
+			gen_epilogue(ctx, fn);
+			return;
+		} else if (ctx->tok == tRETURN) {
+			next(ctx);
+			ItemRec x;
+			if (ctx->tok == tSEMI) {
+				if (fn->type->base != ctx->type_void) {
+					error(ctx, "function requires return type");
+				}
+				next(ctx);
+				x.type = ctx->type_void;
+			} else {
+				parse_expr(ctx, &x);
+				if (!sametype(fn->type->base, x.type)) {
+					error(ctx, "return types do not match");
+				}
+				require(ctx, tSEMI);
+			}
+			gen_return(ctx, &x);
+		} else {
+			expected(ctx, "statement");
+		}
+	}
 }
 
 Object parse_param(Ctx ctx, String fname, u32 n, Object first, Object last) {
@@ -639,7 +780,7 @@ void parse_function(Ctx ctx) {
 	Object obj = ctx->symtab;
 	while (obj != nil) {
 		if (obj->name == fname) {
-			if (obj->type->kind != tFunc) {
+			if (obj->kind != tFunc) {
 				error(ctx, "redefining '%s' as function", fname->text);
 			}
 			if (!isdef) {
@@ -651,6 +792,9 @@ void parse_function(Ctx ctx) {
 			if (ftype != obj->type->base) {
 				error(ctx, "function definition mismatch for '%s' (return type)", fname->text);
 			}
+			if (obj->type->len != n) {
+				error(ctx, "function definition mismatch for '%s' (parameter count)", fname->text);
+			}
 			Object pa = first;
 			Object pb = obj->type->first;
 			u32 i = 1;
@@ -660,9 +804,6 @@ void parse_function(Ctx ctx) {
 				}
 				pa = pa->next;
 				pb = pb->next;
-			}
-			if ((pa != nil) || (pb != nil)) {
-				error(ctx, "function definition mismatch for '%s' (parameter count mismatch)", fname->text);
 			}
 			break;
 		}
@@ -678,7 +819,7 @@ void parse_function(Ctx ctx) {
 		type->obj = obj;
 		type->first = first;
 		type->base = ftype;
-		type->len = 0;
+		type->len = n;
 		type->size = 0;
 
 		obj->kind = oType; //??
@@ -696,7 +837,7 @@ void parse_function(Ctx ctx) {
 	// handle definition if it is one
 	if (isdef) {
 		obj->flags |= ofDefined;
-		parse_function_body(ctx);
+		parse_function_body(ctx, obj);
 	}
 }
 
@@ -717,15 +858,242 @@ void parse_program(Ctx ctx) {
 			parse_global_var(ctx);
 			break;
 		case tEOF:
-			break;
+			return;
 		default:
 			expected(ctx, "func or var");
 		}
 	}
 }
 
+// ================================================================
+
+void emit(Ctx ctx, u32 ins) {
+	ctx->code[ctx->pc / 4] = ins;
+	ctx->pc = ctx->pc + 4;
+}
+
+enum {
+	R0 = 0, R1 = 1, R2 = 2, R3 = 3, R4 = 4, R5 = 5, R6 = 6, R7 = 7,
+	R8 = 9, R9 = 9, R10 = 10, R11 = 11, MT = 12, SB = 13, SP = 14, LR = 15,
+};
+enum {
+	MOV = 0x0000, LSL = 0x0001, ASR = 0x0002, ROR = 0x0003,
+	AND = 0x0004, ANN = 0x0005, IOR = 0x0006, XOR = 0x0007,
+	ADD = 0x0008, SUB = 0x0009, MUL = 0x000A, DIV = 0x000B,
+	FAD = 0x000C, FSB = 0x000D, FML = 0x000E, FDV = 0x000F,
+	ADC = 0x2008, SBC = 0x2009, UML = 0x200A,
+	MHI = 0x2000,
+	MOV_H = 0x2000,
+	MOV_CC = 0x3000,
+};
+void emit_op(Ctx ctx, u32 op, u32 a, u32 b, u32 c) {
+	emit(ctx, (op << 16) | (a << 24) | (b << 20) | c);
+}
+void emit_opi(Ctx ctx, u32 op, u32 a, u32 b, u32 n) {
+	emit(ctx, ((0x4000 | op) << 16) | (a << 24) | (b << 20) | (n & 0xffff));
+}
+void emit_mov(Ctx ctx, u32 a, u32 n) {
+	u32 m = n >> 16;
+	if (m == 0) {
+		emit_opi(ctx, MOV, a, 0, n);
+	} else if (m == 0xFFFF) {
+		emit_opi(ctx, MOV | 0x1000, a, 0, n);
+	} else {
+		emit_opi(ctx, MHI, a, 0, m);
+		if ((n & 0xFFFF) != 0) {
+			emit_opi(ctx, IOR, a, a, n);
+		}
+	}
+}
+
+enum {
+	LDW = 8, LDB = 9, STW = 10, STB = 11
+};
+void emit_mem(Ctx ctx, u32 op, u32 a, u32 b, u32 off) {
+	emit(ctx, (op << 28) | (a << 24) | (b << 20) | (off & 0xfffff));
+}
+
+enum {
+	MI = 0, EQ = 1, CS = 2,  VS = 3,  LS = 4,  LT = 5,  LE = 6,  AL = 7,
+	PL = 8, NE = 9, CC = 10, VC = 11, HI = 12, GE = 13, GT = 14, NV = 15,
+	L = 0x10,
+};
+void emit_br(Ctx ctx, u32 op, u32 r) {
+	emit(ctx, ((0xC0 | op) << 24) | r);
+}
+void emit_bi(Ctx ctx, u32 op, u32 off) {
+	emit(ctx, ((0xE0 | op) << 24) | (off & 0xffffff));
+}
+
+// ================================================================
+
+const char* item_kind(u32 n) {
+	if (n == iConst) {
+		return "const";
+	} else if (n == iVar) {
+		return "var";
+	} else if (n == iParam) {
+		return "param";
+	} else if (n == iReg) {
+		return "reg";
+	} else if (n == iRegInd) {
+		return "regind";
+	} else if (n == iCond) {
+		return "cond";
+	} else {
+		return "???";
+	}
+}
+void print_item(Item x) {
+	fprintf(stderr, "ITEM(%s)%s t=%p r=%u a=%08x b=%08x\n",
+		item_kind(x->kind), (x->flags & ifReadOnly) ? " RO" : "",
+		x->type, x->r, x->a, x->b);
+}
+
+u32 get_reg_tmp(Ctx ctx) {
+	u32 n = 8;
+	while (n < 12) {
+		if (!(ctx->regbits & (1 << n))) {
+			ctx->regbits |= (1 << n);
+			return n;
+		}
+		n++;
+	}
+	error(ctx, "cannot allocate register");
+	return 0;
+}
+
+void put_reg(Ctx ctx, u32 r) {
+	ctx->regbits = ctx->regbits & (~(1 << r));
+}
+
+void gen_load(Ctx ctx, Item x, u32 r) {
+	if (x->kind == iReg) {
+		if (x->r != r) {
+			emit_op(ctx, MOV, r, 0, x->r);
+		}
+	} else if (x->kind == iConst) {
+		emit_mov(ctx, r, x->a);
+	} else {
+		error(ctx, "gen_load failed");
+	}
+}
+
+void gen_return(Ctx ctx, Item x) {
+	if (x->type != ctx->type_void) {
+		gen_load(ctx, x, R0);
+	}
+	// XXX: branch to epilogue
+}
+
+void gen_prologue(Ctx ctx, Object fn) {
+	fn->value = ctx->pc;
+	emit_opi(ctx, SUB, SP, SP, 4 + fn->type->size);
+	emit_mem(ctx, STW, LR, SP, 0);
+}
+
+void gen_epilogue(Ctx ctx, Object fn) {
+	emit_mem(ctx, LDW, LR, SP, 0);
+	emit_opi(ctx, ADD, SP, SP, 4 + fn->type->size);
+	emit_br(ctx, AL, LR);
+}
+
+
+void gen_start(Ctx ctx) {
+	// placeholder branch to init
+	emit_bi(ctx, AL, 0);
+}
+
+void gen_end(Ctx ctx) {
+	ctx->code[0] |= (ctx->pc - 4) >> 2; // patch branch at 0
+
+	String str = mkstring(ctx, "start", 5);
+	Object obj = ctx->symtab;
+	while (obj != nil) {
+		if (obj->name == str) {
+			if (obj->type->kind != tFunc) {
+				error(ctx, "'start' is not a function\n");
+			}
+			if (obj->first != nil) {
+				error(ctx, "'start' must have no parameters\n");
+			}
+			emit_mov(ctx, 14, 0x100000);                      // MOV SP, RAMTOP
+			emit_bi(ctx, AL|L, -((ctx->pc + 4 - obj->value) >> 2));  // BL start
+			emit_mov(ctx, 1, 0xFFFF0000);                     // MOV R1, IOBASE
+			emit_mem(ctx, STW, 0, 1, 0x100);                  // SW R0, [R1, 0x100]
+			emit_br(ctx, AL, -1);                             // B .
+			return;
+		}
+		obj = obj->next;
+	}
+	error(ctx, "no 'start' function\n");
+}
+
+void gen_write(Ctx ctx, const char* outname) {
+	int fd = open(outname, O_CREAT | O_TRUNC | O_WRONLY, 0644);
+	if (fd < 0) {
+		error(ctx, "cannot open '%s' to write", outname);
+	}
+	u32 n = 0;
+	while (n < ctx->pc) {
+		if (write(fd, ctx->code + (n/4), sizeof(u32)) != sizeof(u32)) {
+			error(ctx, "error writing '%s'", outname);
+		}
+		n += 4;
+	}
+	close(fd);
+}
+
+#include "risc5.h"
+
+void gen_listing(Ctx ctx, const char* listfn, const char* srcfn) {
+	FILE* fin = fopen(srcfn, "r");
+	if (fin == NULL) {
+		error(ctx, "cannot re-read '%s'\n", srcfn);
+	}
+	FILE* fout = fopen(listfn, "w");
+	if (fout == NULL) {
+		error(ctx, "cannot write '%s'\n", listfn);
+	}
+	u32 n = 0;
+	u32 line = 1;
+	char buf[1024];
+	while (n < ctx->pc) {
+		u32 ins = ctx->code[n/4];
+		if ((line < ctx->xref[n/4]) && fin) {
+			fprintf(fout, "\n");
+			while (line < ctx->xref[n/4]) {
+				if (fgets(buf, sizeof(buf), fin) == nil) {
+					fin = nil;
+					break;
+				}
+				u32 i = 0;
+				while (buf[i] != 0) {
+					if (buf[i] > ' ') {
+						fprintf(fout,"%s", buf);
+						break;
+					}
+					i++;
+				}
+				line++;
+			}
+			fprintf(fout, "\n");
+		}
+		risc5dis(n, ins, buf);
+		fprintf(fout, "%08x: %08x  %s\n", n, ins, buf);
+		n += 4;
+	}
+	fclose(fout);
+	if (fin) {
+		fclose(fin);
+	}
+}
+
+// ================================================================
+
 int main(int argc, char **argv) {
-	const char *outname = "out.hex";
+	const char *outname = "out.bin";
+	const char *listname = "out.lst";
 
 	CtxRec ctx;
 	init_ctx(&ctx);
@@ -751,7 +1119,11 @@ int main(int argc, char **argv) {
 	} while (ctx.tok != tEOF);
 	printf("\n");
 #else
+	gen_start(&ctx);
 	parse_program(&ctx);
+	gen_end(&ctx);
+	gen_write(&ctx, outname);
+	gen_listing(&ctx, listname, ctx.filename);
 #endif
 
 	return 0;

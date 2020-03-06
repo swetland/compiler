@@ -61,7 +61,7 @@ ident := ( letter | "_" ) | { letter | digit | "_" }
 
 letter := "A" .. "Z" | "a" .. "z" 
 
-statement := [ assignment | if | while | for | break | return ]
+statement := [ assignment | if | while | for | break | return | expr ";" | ";" ]
 
 assignment := designator "=" expr ";"
 
