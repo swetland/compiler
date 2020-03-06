@@ -53,12 +53,14 @@ char *tnames[] = {
 
 typedef struct StringRec* String;
 typedef struct ObjectRec* Object;
+typedef struct ScopeRec* Scope;
 typedef struct TypeRec* Type;
 typedef struct ItemRec* Item;
 typedef struct CtxRec* Ctx;
 
 typedef struct StringRec StringRec;
 typedef struct ObjectRec ObjectRec;
+typedef struct ScopeRec ScopeRec;
 typedef struct TypeRec TypeRec;
 typedef struct ItemRec ItemRec;
 typedef struct CtxRec CtxRec;
@@ -67,6 +69,12 @@ struct StringRec {
 	String next;
 	u32 len;
 	char text[0];
+};
+
+struct ScopeRec {
+	Scope next;    // next in scope stack
+	Object first;  // first object in this scope
+	u32 level;     // height in stack (0 == globals, ...)
 };
 
 // ------------------------------------------------------------------
@@ -86,7 +94,7 @@ enum {           // value
 	oConst,  // const value
 	oGlobal, // global offset
 	oVar,    // frame offset
-	oParam,  // frame offset
+	oParam,  // param slot
 	oField,  // record offset
 	oType,   // type-desc-ptr
 	oFunc,   // address
@@ -163,8 +171,8 @@ struct CtxRec {
 
 	String strtab;         // TODO: hashtable
 	Object typetab;        // TODO: hashtable
-	Object symtab;         // TODO: hashtable, globals, functions
-	Object scope;
+	Scope scope;           // scope stack
+	ScopeRec global;
 
 	Type type_void;
 	Type type_byte;
@@ -184,6 +192,7 @@ struct CtxRec {
 void gen_prologue(Ctx ctx, Object fn);
 void gen_epilogue(Ctx ctx, Object fn);
 void gen_return(Ctx ctx, Item x);
+void gen_add_op(Ctx ctx, u32 op, Item x, Item y);
 
 String mkstring(Ctx ctx, const char* text, u32 len) {
 	String str = ctx->strtab;
@@ -240,6 +249,8 @@ void init_ctx(Ctx ctx) {
 	ctx->type_int32   = mktype(ctx, "i32",  3, tInt32, 4);
 	ctx->type_nil     = mktype(ctx, "nil",  3, tNil, 4);
 	ctx->type_string  = mktype(ctx, "str",  3, tString, 8);
+
+	ctx->scope = &(ctx->global);
 }
 
 bool sametype(Type a, Type b) {
@@ -565,14 +576,44 @@ void require(Ctx ctx, token_t tok) {
 	next(ctx);
 }
 
+// Look for an identifier in the scope stack
 Object find(Ctx ctx, String str) {
-	Object obj = ctx->symtab; // scope?
-	while (obj != nil) {
-		if (obj->name == str) {
-			return obj;
+	Scope scope = ctx->scope;
+	while (scope != nil) {
+		Object obj = scope->first;
+		while (obj != nil) {
+			if (obj->name == str) {
+				return obj;
+			}
+			obj = obj->next;
 		}
+		scope = scope->next;
 	}
 	return nil;
+}
+
+void make_global(Ctx ctx, Object obj) {
+	obj->next = ctx->global.first;
+	ctx->global.first = obj;
+}
+
+// push a scope on the scope stack
+// if obj is non-nil, it is the first of a list of items in that scope
+void push_scope(Ctx ctx, Object obj) {
+	Scope scope = malloc(sizeof(ScopeRec));
+	scope->level = ctx->scope->level + 1;
+	scope->next = ctx->scope;
+	scope->first = obj;
+	ctx->scope = scope;
+	// XXX lazy scopes
+}
+
+void pop_scope(Ctx ctx) {
+	if (ctx->scope->level == 0) {
+		error(ctx, "cannot pop the global scope");
+	}
+	ctx->scope = ctx->scope->next;
+	// XXX delete?
 }
 
 void setitem(Item itm, u32 kind, Type type, u32 r, u32 a, u32 b) {
@@ -610,11 +651,15 @@ void parse_factor(Ctx ctx, Item x) {
 		if (obj == nil) {
 			error(ctx, "unknown identifier '%s'", str->text);
 		}
-		error(ctx, "unsupported identifier");
+		if (obj->kind == oParam) {
+			setitem(x, iParam, obj->type, 0, obj->value, 0);
+		} else {
+			error(ctx, "unsupported identifier");
 		// .ident .ident ...
 		// [ explist ] (array)
 		// ( explist ) (fncall)
 		// const
+		}
 	}
 	next(ctx);
 }
@@ -635,13 +680,21 @@ void parse_simple_expr(Ctx ctx, Item x) {
 		next(ctx);
 	} else if (ctx->tok == tMINUS) {
 		negate = true;
+		error(ctx, "unsupported");
 	}
 	parse_term(ctx, x);
-	while ((ctx->tok == tPLUS) || (ctx->tok == tMINUS) || (ctx->tok == tOR)) {
-		u32 op = ctx->tok;
-		next(ctx);
-		ItemRec y;
-		parse_term(ctx, &y);
+	while (true) {
+		if ((ctx->tok == tPLUS) || (ctx->tok == tMINUS)) {
+			u32 op = ctx->tok;
+			next(ctx);
+			ItemRec y;
+			parse_term(ctx, &y);
+			gen_add_op(ctx, op, x, &y);
+		} else if (ctx->tok == tOR) {
+			error(ctx, "unsupported");
+		} else {
+			break;
+		}
 	}
 }
 
@@ -681,9 +734,11 @@ Type parse_type(Ctx ctx) {
 
 void parse_function_body(Ctx ctx, Object fn) {
 	gen_prologue(ctx, fn);
+	push_scope(ctx, fn->first);
 	while (true) {
 		if (ctx->tok == tCBRACE) {
 			next(ctx);
+			pop_scope(ctx);
 			gen_epilogue(ctx, fn);
 			return;
 		} else if (ctx->tok == tRETURN) {
@@ -776,42 +831,34 @@ void parse_function(Ctx ctx) {
 	}
 
 	// Look for an existing declaration or definintion of this function
-	// and if it exists, ensure that we are in argeement with it
-	Object obj = ctx->symtab;
-	while (obj != nil) {
-		if (obj->name == fname) {
-			if (obj->kind != tFunc) {
-				error(ctx, "redefining '%s' as function", fname->text);
-			}
-			if (!isdef) {
-				error(ctx, "redeclared function '%s'", fname->text);
-			}
-			if (obj->flags & ofDefined) {
-				error(ctx, "redefined function '%s'", fname->text);
-			}
-			if (ftype != obj->type->base) {
-				error(ctx, "function definition mismatch for '%s' (return type)", fname->text);
-			}
-			if (obj->type->len != n) {
-				error(ctx, "function definition mismatch for '%s' (parameter count)", fname->text);
-			}
-			Object pa = first;
-			Object pb = obj->type->first;
-			u32 i = 1;
-			while ((pa != nil) && (pb != nil)) {
-				if (!sametype(pa->type, pb->type)) {
-					error(ctx, "function definition mismatch for '%s' (parameter #%u)", fname->text, i);
-				}
-				pa = pa->next;
-				pb = pb->next;
-			}
-			break;
+	Object obj = find(ctx, fname);
+	if (obj != nil) {
+		// such a named identifier exists
+		// check to see if we are in agreement with it
+		if (obj->kind != oFunc) {
+			error(ctx, "redefining '%s' as function", fname->text);
 		}
-		obj = obj->next;
-	}
-
-	// if there was no existing record of this function, create one now
-	if (obj == nil) {
+		if (isdef && (obj->flags & ofDefined)) {
+			error(ctx, "redefined function '%s'", fname->text);
+		}
+		if (ftype != obj->type->base) {
+			error(ctx, "func '%s' return type differs from decl", fname->text);
+		}
+		if (obj->type->len != n) {
+			error(ctx, "func '%s' parameter count differs from decl", fname->text);
+		}
+		Object pa = first;
+		Object pb = obj->type->first;
+		u32 i = 1;
+		while ((pa != nil) && (pb != nil)) {
+			if (!sametype(pa->type, pb->type)) {
+				error(ctx, "func '%s' param %u differs from decl", fname->text, i);
+			}
+			pa = pa->next;
+			pb = pb->next;
+		}
+	} else {
+		// if there was no existing record of this function, create one now
 		Type type = malloc(sizeof(TypeRec));
 		obj = malloc(sizeof(ObjectRec));
 
@@ -822,7 +869,7 @@ void parse_function(Ctx ctx) {
 		type->len = n;
 		type->size = 0;
 
-		obj->kind = oType; //??
+		obj->kind = oFunc;
 		obj->flags = 0;
 		obj->value = 0;
 		obj->next = nil;
@@ -830,8 +877,7 @@ void parse_function(Ctx ctx) {
 		obj->type = type;
 		obj->name = fname;
 
-		obj->next = ctx->symtab;
-		ctx->symtab = obj;
+		make_global(ctx, obj);
 	}
 
 	// handle definition if it is one
@@ -866,6 +912,27 @@ void parse_program(Ctx ctx) {
 }
 
 // ================================================================
+u32 get_reg_tmp(Ctx ctx) {
+	u32 n = 8;
+	while (n < 12) {
+		if (!(ctx->regbits & (1 << n))) {
+			ctx->regbits |= (1 << n);
+			printf("GET REG %u\n", n);
+			return n;
+		}
+		n++;
+	}
+	error(ctx, "cannot allocate register");
+	return 0;
+}
+
+void put_reg(Ctx ctx, u32 r) {
+	printf("PUT REG %u\n", r);
+	if (!(ctx->regbits & (1 << r))) {
+		error(ctx, "freeing non-allocated register %u\n", r);
+	}
+	ctx->regbits = ctx->regbits & (~(1 << r));
+}
 
 void emit(Ctx ctx, u32 ins) {
 	ctx->code[ctx->pc / 4] = ins;
@@ -875,6 +942,7 @@ void emit(Ctx ctx, u32 ins) {
 enum {
 	R0 = 0, R1 = 1, R2 = 2, R3 = 3, R4 = 4, R5 = 5, R6 = 6, R7 = 7,
 	R8 = 9, R9 = 9, R10 = 10, R11 = 11, MT = 12, SB = 13, SP = 14, LR = 15,
+	TMP = 16
 };
 enum {
 	MOV = 0x0000, LSL = 0x0001, ASR = 0x0002, ROR = 0x0003,
@@ -892,6 +960,9 @@ void emit_op(Ctx ctx, u32 op, u32 a, u32 b, u32 c) {
 void emit_opi(Ctx ctx, u32 op, u32 a, u32 b, u32 n) {
 	emit(ctx, ((0x4000 | op) << 16) | (a << 24) | (b << 20) | (n & 0xffff));
 }
+
+// mov (load immediate) using the appropriate one or two
+// instruction form for the immediate argument
 void emit_mov(Ctx ctx, u32 a, u32 n) {
 	u32 m = n >> 16;
 	if (m == 0) {
@@ -903,6 +974,25 @@ void emit_mov(Ctx ctx, u32 a, u32 n) {
 		if ((n & 0xFFFF) != 0) {
 			emit_opi(ctx, IOR, a, a, n);
 		}
+	}
+}
+
+// immediate op, using a temporary register and register op if the
+// immediate argument does not fit the single instruction form
+void emit_opi_n(Ctx ctx, u32 op, u32 a, u32 b, u32 n) {
+	u32 m = n >> 16;
+	if (m == 0) {
+		emit_opi(ctx, op, a, b, n);
+	} else if (m == 0xFFFF) {
+		emit_opi(ctx, op | 0x1000, a, b, n);
+	} else {
+		u32 t0 = get_reg_tmp(ctx);
+		emit_opi(ctx, MHI, t0, 0, m);
+		if ((n & 0xFFFF) != 0) {
+			emit_opi(ctx, IOR, t0, t0, n);
+		}
+		emit_op(ctx, op, a, b, t0);
+		put_reg(ctx, t0);
 	}
 }
 
@@ -950,51 +1040,105 @@ void print_item(Item x) {
 		x->type, x->r, x->a, x->b);
 }
 
-u32 get_reg_tmp(Ctx ctx) {
-	u32 n = 8;
-	while (n < 12) {
-		if (!(ctx->regbits & (1 << n))) {
-			ctx->regbits |= (1 << n);
-			return n;
-		}
-		n++;
+// check to see if the last emitted instruction
+// loaded a particular register and if so, patch
+// it to load a different register
+bool patch_last_load(Ctx ctx, u32 oldr, u32 newr) {
+	u32 ins = ctx->code[(ctx->pc - 4) / 4];
+	u32 n = ins >> 29;
+	if ((n == 0b101) || (n == 0b110) || (n == 0b111)) {
+		// store and branch instructions can be ignored
+		return false;
 	}
-	error(ctx, "cannot allocate register");
-	return 0;
+	if (((ins >> 24) & 15) != oldr) {
+		return false;
+	}
+	ctx->code[(ctx->pc - 4) / 4] = (ins & 0xF0FFFFFF) | (newr << 24);
+	return true;
 }
 
-void put_reg(Ctx ctx, u32 r) {
-	ctx->regbits = ctx->regbits & (~(1 << r));
-}
-
-void gen_load(Ctx ctx, Item x, u32 r) {
+// load the value of an item into a specific register
+void gen_load_reg(Ctx ctx, Item x, u32 r) {
 	if (x->kind == iReg) {
 		if (x->r != r) {
-			emit_op(ctx, MOV, r, 0, x->r);
+			if (patch_last_load(ctx, x->r, r)) {
+				put_reg(ctx, x->r);
+			} else {
+				emit_op(ctx, MOV, r, 0, x->r);
+				put_reg(ctx, x->r);
+			}
 		}
 	} else if (x->kind == iConst) {
 		emit_mov(ctx, r, x->a);
+	} else if (x->kind == iParam) {
+		emit_mem(ctx, LDW, r, SP, 4 + x->a * 4);
 	} else {
 		error(ctx, "gen_load failed");
+	}
+	x->kind = iReg;
+	x->r = r;
+}
+
+// convert an item to value-in-register format
+// if it's not already in that format
+void gen_load(Ctx ctx, Item x) {
+	if (x->kind != iReg) {
+		gen_load_reg(ctx, x, get_reg_tmp(ctx));
 	}
 }
 
 void gen_return(Ctx ctx, Item x) {
 	if (x->type != ctx->type_void) {
-		gen_load(ctx, x, R0);
+		gen_load_reg(ctx, x, R0);
 	}
 	// XXX: branch to epilogue
 }
 
+void gen_add_op(Ctx ctx, u32 op, Item x, Item y) {
+	if (op == tPLUS) {
+		op = ADD;
+	} else {
+		op = SUB;
+	}
+	if ((x->kind == iConst) && (y->kind == iConst)) {
+		// XC = XC op YC
+		if (op == ADD) {
+			x->a = x->a + y->a;
+		} else {
+			x->a = x->a - y->a;
+		}
+	} else if (y->kind == iConst) {
+		// XR = XR op YC
+		gen_load(ctx, x);
+		if (y->a != 0) {
+			emit_opi_n(ctx, op, x->r, x->r, y->a);
+		}
+	} else {
+		// XR = XR op YR
+		gen_load(ctx, x);
+		gen_load(ctx, y);
+		emit_op(ctx, op, x->r, x->r, y->r);
+		put_reg(ctx, y->r);
+	}
+}
+
 void gen_prologue(Ctx ctx, Object fn) {
 	fn->value = ctx->pc;
-	emit_opi(ctx, SUB, SP, SP, 4 + fn->type->size);
+	emit_opi(ctx, SUB, SP, SP, 4 + fn->type->len * 4);
 	emit_mem(ctx, STW, LR, SP, 0);
+
+	Object param = fn->first;
+	u32 r = 0;
+	while (param != nil) {
+		emit_mem(ctx, STW, r, SP, (r + 1) * 4);
+		r++;
+		param = param->next;
+	}
 }
 
 void gen_epilogue(Ctx ctx, Object fn) {
 	emit_mem(ctx, LDW, LR, SP, 0);
-	emit_opi(ctx, ADD, SP, SP, 4 + fn->type->size);
+	emit_opi(ctx, ADD, SP, SP, 4 + fn->type->len * 4);
 	emit_br(ctx, AL, LR);
 }
 
@@ -1008,23 +1152,20 @@ void gen_end(Ctx ctx) {
 	ctx->code[0] |= (ctx->pc - 4) >> 2; // patch branch at 0
 
 	String str = mkstring(ctx, "start", 5);
-	Object obj = ctx->symtab;
+	Object obj = find(ctx, str);
 	while (obj != nil) {
-		if (obj->name == str) {
-			if (obj->type->kind != tFunc) {
-				error(ctx, "'start' is not a function\n");
-			}
-			if (obj->first != nil) {
-				error(ctx, "'start' must have no parameters\n");
-			}
-			emit_mov(ctx, 14, 0x100000);                      // MOV SP, RAMTOP
-			emit_bi(ctx, AL|L, -((ctx->pc + 4 - obj->value) >> 2));  // BL start
-			emit_mov(ctx, 1, 0xFFFF0000);                     // MOV R1, IOBASE
-			emit_mem(ctx, STW, 0, 1, 0x100);                  // SW R0, [R1, 0x100]
-			emit_br(ctx, AL, -1);                             // B .
-			return;
+		if (obj->type->kind != tFunc) {
+			error(ctx, "'start' is not a function\n");
 		}
-		obj = obj->next;
+		if (obj->first != nil) {
+			error(ctx, "'start' must have no parameters\n");
+		}
+		emit_mov(ctx, 14, 0x100000);                      // MOV SP, RAMTOP
+		emit_bi(ctx, AL|L, -((ctx->pc + 4 - obj->value) >> 2));  // BL start
+		emit_mov(ctx, 1, 0xFFFF0000);                     // MOV R1, IOBASE
+		emit_mem(ctx, STW, 0, 1, 0x100);                  // SW R0, [R1, 0x100]
+		emit_br(ctx, AL, -1);                             // B .
+		return;
 	}
 	error(ctx, "no 'start' function\n");
 }

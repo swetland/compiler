@@ -1,7 +1,7 @@
 # Copyright 2020, Brian Swetland <swetland@frotz.net>
 # Licensed under the Apache License, Version 2.0.
 
-0000aaaa----0000------------cccc mov %a, c
+0000aaaa----0000------------cccc mov %a, %c
 0010aaaa----0000---------------- mov %a, h
 0011aaaa----0000---------------- mov %a, nzcv
 0010aaaabbbb1000------------cccc adc %a, %b, %c
