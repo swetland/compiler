@@ -1271,6 +1271,7 @@ void gen_store(Ctx ctx, Item val, Item var) {
 	gen_load(ctx, val);
 	if (var->kind == iParam) {
 		emit_mem(ctx, STW, val->r, SP, 4 + var->a * 4);
+		put_reg(ctx, val->r);
 	} else {
 		error(ctx, "gen_store: invalid target");
 	}
