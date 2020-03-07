@@ -20,22 +20,30 @@ type := ident [ arraydef | "&"]
 arraydef := "[" [ integer { "," integer } ] "]"
 
 
-expr := simpleexpr [ relation simpleexpr ]
+operand := literal | identifier | "(" expression ")"
+literal := integer | string | "true" | "false" | "nil"
 
-relation := "==" | "!=" | "<" | "<=" | ">" | ">="
-
-simpleexpr := [ "+" | "-" ] term { addop term }
-
-addop := "+" | "-" | "||"
-
-term := factor { mulop factor }
-
-mulop := "*" | "/" | "%" | "&&"
+primary-expr := operand | conversion | primary-expr selector | primary-expr index | primary-expr arguments
+selector := "." identifier
+index := "[" expr "]"
+arguments := "(" [ expr { "," expr } ] ")"
 
 factor := integer | string | special | designator [ params ] | "(" expr ")" | "~" factor
+term := factor { mulop factor }
+simpleexpr := [ "+" | "-" ] term { addop term }
+expr := simpleexpr [ relop simpleexpr ]
 
-special := "nil" | "true" | "false"
+unary-expr := primary-expr | unary-op unary-expr
+mul-expr := unary-expr { mul-op unary-expr }
+add-expr := mul-expr { add-op mul-expr }
+rel-expr := add-expr [ rel-op add-expr ]
+and-expr := rel-expr { "&&" rel-expr }
+expr := and-expr { "||" and-expr }
 
+unary-op := "+" | "-" | "!" | "~" | "&"
+mul-op := "*" | "/" | "%" | "<<" | ">>" | "&" | "&~"
+add-op := "+" | "-" | "|" | "^"
+rel-op := "==" | "!=" | "<" | "<=" | ">" | ">="
 
 integer := digit {digit} | "0" "x" {hexdigit} | "0" "b" {bindigit}
 
@@ -61,9 +69,13 @@ ident := ( letter | "_" ) | { letter | digit | "_" }
 
 letter := "A" .. "Z" | "a" .. "z" 
 
-statement := [ assignment | if | while | for | break | return | expr ";" | ";" ]
+statement := assignment | if | while | for | break | return | incdec | expr ";" | ";"
 
-assignment := designator "=" expr ";"
+assignment := designator assign-op expr ";"
+
+incdec := expr ( "++" | "--" ) ";"
+
+assign-op := "=" | ( add-op | mul-op ) "="
 
 if := "if" expr block { "else" "if" expr block } [ "else" block ]
 
@@ -75,6 +87,6 @@ break := "break" ";"
 
 return := "return" expr ";"
 
-block := "{" { statement ";" } "}"
+block := "{" { statement } "}"
 
 

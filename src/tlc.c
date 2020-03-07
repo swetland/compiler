@@ -1,4 +1,4 @@
-// Copyright 2020, Brian Swetland <swetland@frotz.net>
+// Copyright 2020, Brian Swetland <swetland@frotz.net>
 // Licensed under the Apache License, Version 2.0.
 
 #include <stdio.h>
@@ -20,32 +20,41 @@
 typedef uint32_t u32;
 typedef int32_t i32;
 
+// token classes (tok >> 8)
+enum {
+	tcNONE = 0, tcRELOP = 1, tcADDOP = 2, tcMULOP = 3,
+};
+
 typedef enum {
-	tEOF, tEOL,
-	tDOT, tCOMMA, tCOLON, tSEMI, tBANG, tOBRACK, tCBRACK,
-	tOPAREN, tCPAREN, tOBRACE, tCBRACE, tASSIGN,
-	tPLUS, tMINUS, tSTAR, tSLASH, tPERCENT, tAMP, tPIPE, tCARET,
-	tAND, tOR,
-	// comparisons (keep EQ/NE first/last)
-	tEQ, tGT, tGE, tLT, tLE, tNE,
-	tINCR, tDECR,
-	tVAR, tSTRUCT, tFUNC, tRETURN, tIF, tELSE,
-	tWHILE, tFOR, tBREAK, tCONTINUE, tSWITCH, tCASE,
-	tTRUE, tFALSE, tNIL,
-	tNAME, tNUMBER, tSTRING,
-	NUMTOKENS,
+	tEOF = 0x000, tEOL = 0x001,
+	tDOT = 0x002, tCOMMA = 0x003, tCOLON = 0x004, tSEMI = 0x005, tBANG = 0x006,
+	tOBRACK = 0x007, tCBRACK = 0x008, tOPAREN = 0x009, tCPAREN = 0x00A,
+	tOBRACE = 0x00B, tCBRACE = 0x00C, tASSIGN = 0x00D,
+	tPLUS = 0x20E, tMINUS = 0x20F, tSTAR = 0x310, tSLASH = 0x311,
+	tPERCENT = 0x312, tAMP = 0x313, tPIPE = 0x214, tCARET = 0x215,
+	tNOT = 0x016, tANDNOT = 0x317, tAND = 0x018, tOR = 0x019,
+	tEQ = 0x11A, tGT = 0x11B, tGE = 0x11C, tLT = 0x11D, tLE = 0x11E, tNE = 0x11F,
+	tLEFT = 0x320, tRIGHT = 0x321, tINC = 0x022, tDEC = 0x023,
+	tVAR = 0x024, tSTRUCT = 0x025, tFUNC = 0x026, tRETURN = 0x027,
+	tIF = 0x028, tELSE = 0x029, tWHILE = 0x02A, tFOR = 0x02B,
+	tBREAK = 0x02C, tCONTINUE = 0x02D, tSWITCH = 0x02E, tCASE = 0x02F,
+	tTRUE = 0x030, tFALSE = 0x031, tNIL = 0x032,
+	tNAME = 0x033, tNUMBER = 0x034, tSTRING = 0x035,
 } token_t;
 
 char *tnames[] = {
 	"<EOF>", "<EOL>", 
-	".", ",", ":", ";", "!", "[", "]",
-	"(", ")","{", "}", "=",
-	"+", "-", "*", "/", "%", "&", "|", "^",
-	"&&", "||",
+	".", ",", ":", ";", "!",
+	"[", "]", "(", ")",
+	"{", "}", "=",
+	"+", "-", "*", "/",
+	"%", "&", "|", "^",
+	"~", "&~", "&&", "||",
 	"==", ">", ">=", "<", "<=", "!=",
-	"++", "--",
-	"var", "struct", "func", "return", "if", "else",
-	"while", "for", "break", "switch", "case", 
+	"<<", ">>", "++", "--",
+	"var", "struct", "func", "return",
+	"if", "else", "while", "for",
+	"break", "continue", "switch", "case",
 	"true", "false", "nil",
 	"<NAME>", "<NUMBER>", "<STRING>",
 };
@@ -193,6 +202,9 @@ void gen_prologue(Ctx ctx, Object fn);
 void gen_epilogue(Ctx ctx, Object fn);
 void gen_return(Ctx ctx, Item x);
 void gen_add_op(Ctx ctx, u32 op, Item x, Item y);
+void gen_mul_op(Ctx ctx, u32 op, Item x, Item y);
+void gen_rel_op(Ctx ctx, u32 op, Item x, Item y);
+void gen_unary_op(Ctx ctx, u32 op, Item x);
 
 String mkstring(Ctx ctx, const char* text, u32 len) {
 	String str = ctx->strtab;
@@ -295,7 +307,8 @@ void error(Ctx ctx, const char *fmt, ...) {
 	va_end(ap);
 	
 	fprintf(stderr,"\n%.*s\n", len, ctx->line);
-	exit(1);
+	abort();
+	//exit(1);
 }
 
 void load(Ctx ctx, const char* filename) {
@@ -499,16 +512,26 @@ token_t _next(Ctx ctx) {
 		case '}': TOKEN(tCBRACE);
 		case '(': TOKEN(tOPAREN);
 		case ')': TOKEN(tCPAREN);
-		case '+': if (s[1] == '+') TOKEN2(tINCR) else TOKEN(tPLUS);
-		case '-': if (s[1] == '-') TOKEN2(tDECR) else TOKEN(tMINUS);
+		case '+': if (s[1] == '+') TOKEN2(tINC) else TOKEN(tPLUS);
+		case '-': if (s[1] == '-') TOKEN2(tDEC) else TOKEN(tMINUS);
 		case '*': TOKEN(tSTAR);
 		case '%': TOKEN(tPERCENT);
 		case '^': TOKEN(tCARET);
+		case '~': TOKEN(tNOT);
 		case '=': if (s[1] == '=') TOKEN2(tEQ) else TOKEN(tASSIGN);
-		case '&': if (s[1] == '&') TOKEN2(tAND) else TOKEN(tAMP);
+		case '&':
+			if (s[1] == '&') TOKEN2(tAND)
+			if (s[1] == '~') TOKEN2(tANDNOT)
+			else TOKEN(tAMP);
 		case '|': if (s[1] == '|') TOKEN2(tOR) else TOKEN(tPIPE);
-		case '>': if (s[1] == '=') TOKEN2(tGE) else TOKEN(tGT);
-		case '<': if (s[1] == '=') TOKEN2(tLE) else TOKEN(tLT);
+		case '>':
+			if (s[1] == '=') TOKEN2(tGE)
+			else if(s[1] == '>') TOKEN2(tRIGHT)
+			else TOKEN(tGT);
+		case '<':
+			if (s[1] == '=') TOKEN2(tLE)
+			else if (s[1] == '<') TOKEN2(tLEFT)
+			else TOKEN(tLT);
 		case '!': if (s[1] == '=') TOKEN2(tNE) else TOKEN(tBANG);
 		case '/':
 			if (s[1] == '/') {
@@ -557,17 +580,17 @@ void print(Ctx ctx) {
 	case tNAME:   printf("@%s ", ctx->tmp); break;
 	case tEOL:    printf("\n"); break;
 	case tSTRING: printstr(ctx->tmp); break;
-	default:      printf("%s ", tnames[ctx->tok]); break;
+	default:      printf("%s ", tnames[ctx->tok & 0x7F]); break;
 	}
 }
 
 void expected(Ctx ctx, const char* what) {
-	error(ctx, "expected %s, found %s", what, tnames[ctx->tok]);
+	error(ctx, "expected %s, found %s", what, tnames[ctx->tok & 0x7F]);
 }
 
 void expect(Ctx ctx, token_t tok) {
 	if (ctx->tok != tok) {
-		error(ctx, "expected %s, found %s", tnames[tok], tnames[ctx->tok]);
+		error(ctx, "expected %s, found %s", tnames[tok], tnames[ctx->tok & 0x7F]);
 	}
 }
 
@@ -629,7 +652,7 @@ void setitem(Item itm, u32 kind, Type type, u32 r, u32 a, u32 b) {
 
 void parse_expr(Ctx ctx, Item x);
 
-void parse_factor(Ctx ctx, Item x) {
+void parse_primary_expr(Ctx ctx, Item x) {
 	if (ctx->tok == tNUMBER) {
 		setitem(x, iConst, ctx->type_int32, 0, ctx->num, 0);
 	} else if (ctx->tok == tSTRING) {
@@ -664,55 +687,81 @@ void parse_factor(Ctx ctx, Item x) {
 	next(ctx);
 }
 
-void parse_term(Ctx ctx, Item x) {
-	parse_factor(ctx, x);
-	while ((ctx->tok == tSTAR) || (ctx->tok == tSLASH) || (ctx->tok == tPERCENT) || (ctx->tok == tOR)) {
+void parse_unary_expr(Ctx ctx, Item x) {
+	if (ctx->tok == tPLUS) {
+		next(ctx);
+		parse_unary_expr(ctx, x);
+	} else if ((ctx->tok == tMINUS) || (ctx->tok == tBANG) || (ctx->tok == tNOT)) {
 		u32 op = ctx->tok;
 		next(ctx);
-		ItemRec y;
-		parse_factor(ctx, &y);
+		parse_unary_expr(ctx, x);
+		gen_unary_op(ctx, op, x);
+	} else if (ctx->tok == tAMP) {
+		next(ctx);
+		error(ctx, "deref unsupported");
+	} else {
+		parse_primary_expr(ctx, x);
 	}
 }
 
-void parse_simple_expr(Ctx ctx, Item x) {
-	bool negate = false;
-	if (ctx->tok == tPLUS) {
+void parse_mul_expr(Ctx ctx, Item x) {
+	parse_unary_expr(ctx, x);
+	printf("mul-expr %x\n", ctx->tok);
+	while ((ctx->tok >> 8) == tcMULOP) {
+		u32 op = ctx->tok;
 		next(ctx);
-	} else if (ctx->tok == tMINUS) {
-		negate = true;
-		error(ctx, "unsupported");
+		ItemRec y;
+		parse_unary_expr(ctx, &y);
+		gen_mul_op(ctx, op, x, &y);
 	}
-	parse_term(ctx, x);
-	while (true) {
-		if ((ctx->tok == tPLUS) || (ctx->tok == tMINUS)) {
-			u32 op = ctx->tok;
-			next(ctx);
-			ItemRec y;
-			parse_term(ctx, &y);
-			gen_add_op(ctx, op, x, &y);
-		} else if (ctx->tok == tOR) {
-			error(ctx, "unsupported");
-		} else {
-			break;
-		}
+}
+
+void parse_add_expr(Ctx ctx, Item x) {
+	parse_mul_expr(ctx, x);
+	printf("add-expr %x\n", ctx->tok);
+	while ((ctx->tok >> 8) == tcADDOP) {
+		u32 op = ctx->tok;
+		next(ctx);
+		ItemRec y;
+		parse_mul_expr(ctx, &y);
+		gen_add_op(ctx, op, x, &y);
+	}
+}
+
+void parse_rel_expr(Ctx ctx, Item x) {
+	parse_add_expr(ctx, x);
+	while ((ctx->tok >> 8) == tcRELOP) {
+		u32 op = ctx->tok;
+		next(ctx);
+		ItemRec y;
+		parse_add_expr(ctx, &y);
+		gen_rel_op(ctx, op, x, &y);
+	}
+}
+
+void parse_and_expr(Ctx ctx, Item x) {
+	parse_rel_expr(ctx, x);
+	while (ctx->tok == tAND) {
+		next(ctx);
+		ItemRec y;
+		parse_rel_expr(ctx, &y);
+		error(ctx, "unsupported and op");
 	}
 }
 
 void parse_expr(Ctx ctx, Item x) {
-	parse_simple_expr(ctx, x);
-	while ((ctx->tok >= tEQ) && (ctx->tok <= tNE)) {
-		u32 op = ctx->tok;
+	parse_and_expr(ctx, x);
+	while (ctx->tok == tOR) {
 		next(ctx);
-		error(ctx, "unsupported relop");
 		ItemRec y;
-		parse_simple_expr(ctx, &y);
+		parse_and_expr(ctx, &y);
+		error(ctx, "unsupported or op");
 	}
 }
 
-
 String parse_name(Ctx ctx, const char* what) {
 	if (ctx->tok != tNAME) {
-		error(ctx, "expected %s, found %s", what, tnames[ctx->tok]);
+		error(ctx, "expected %s, found %s", what, tnames[ctx->tok & 0x7F]);
 	}
 	String str = mkstring(ctx, ctx->tmp, strlen(ctx->tmp));
 	next(ctx);
@@ -917,7 +966,7 @@ u32 get_reg_tmp(Ctx ctx) {
 	while (n < 12) {
 		if (!(ctx->regbits & (1 << n))) {
 			ctx->regbits |= (1 << n);
-			printf("GET REG %u\n", n);
+			//printf("GET REG %u\n", n);
 			return n;
 		}
 		n++;
@@ -927,7 +976,7 @@ u32 get_reg_tmp(Ctx ctx) {
 }
 
 void put_reg(Ctx ctx, u32 r) {
-	printf("PUT REG %u\n", r);
+	//printf("PUT REG %u\n", r);
 	if (!(ctx->regbits & (1 << r))) {
 		error(ctx, "freeing non-allocated register %u\n", r);
 	}
@@ -954,6 +1003,7 @@ enum {
 	MOV_H = 0x2000,
 	MOV_CC = 0x3000,
 };
+
 void emit_op(Ctx ctx, u32 op, u32 a, u32 b, u32 c) {
 	emit(ctx, (op << 16) | (a << 24) | (b << 20) | c);
 }
@@ -1040,6 +1090,26 @@ void print_item(Item x) {
 		x->type, x->r, x->a, x->b);
 }
 
+u32 add_op_to_ins(Ctx ctx, u32 op) {
+	if (op == tPLUS) { return ADD; }
+	if (op == tMINUS) { return SUB; }
+	if (op == tPIPE) { return IOR; }
+	if (op == tCARET) { return XOR; }
+	error(ctx, "invalid add-op");
+	return 0;
+}
+u32 mul_op_to_ins(Ctx ctx, u32 op) {
+	if (op == tSTAR) { return MUL; }
+	if (op == tSLASH) { return DIV; }
+	if (op == tLEFT) { return LSL; }
+	if (op == tRIGHT) { return ASR; }
+	if (op == tAMP) { return AND; }
+	if (op == tANDNOT) { return ANN; }
+	// XXX tPERCENT
+	error(ctx, "invalid mul-op");
+	return 0;
+}
+
 // check to see if the last emitted instruction
 // loaded a particular register and if so, patch
 // it to load a different register
@@ -1095,21 +1165,22 @@ void gen_return(Ctx ctx, Item x) {
 }
 
 void gen_add_op(Ctx ctx, u32 op, Item x, Item y) {
-	if (op == tPLUS) {
-		op = ADD;
-	} else {
-		op = SUB;
-	}
+	op = add_op_to_ins(ctx, op);
 	if ((x->kind == iConst) && (y->kind == iConst)) {
 		// XC = XC op YC
 		if (op == ADD) {
 			x->a = x->a + y->a;
-		} else {
+		} else if (op == SUB) {
 			x->a = x->a - y->a;
+		} else if (op == IOR) {
+			x->a = x->a | y->a;
+		} else if (op == XOR) {
+			x->a = x->a ^ y->a;
 		}
 	} else if (y->kind == iConst) {
 		// XR = XR op YC
 		gen_load(ctx, x);
+		// for all of these, rhs==0 is no-op
 		if (y->a != 0) {
 			emit_opi_n(ctx, op, x->r, x->r, y->a);
 		}
@@ -1120,6 +1191,76 @@ void gen_add_op(Ctx ctx, u32 op, Item x, Item y) {
 		emit_op(ctx, op, x->r, x->r, y->r);
 		put_reg(ctx, y->r);
 	}
+}
+
+void gen_mul_op(Ctx ctx, u32 op, Item x, Item y) {
+	if (op == tPERCENT) {
+		error(ctx, "mod unsupported");
+	}
+	op = mul_op_to_ins(ctx, op);
+	if ((x->kind == iConst) && (y->kind == iConst)) {
+		// XC = XC op YC
+		if (op == MUL) {
+			x->a = x->a * y->a;
+		} else if (op == DIV) {
+			x->a = x->a / y->a;
+		} else if (op == LSL) {
+			x->a = x->a << y->a;
+		} else if (op == ASR) {
+			x->a = x->a >> y->a;
+		} else if (op == AND) {
+			x->a = x->a & y->a;
+		} else if (op == ANN) {
+			x->a = x->a & (~y->a);
+		}
+	} else if (y->kind == iConst) {
+		// XR = XR op YC
+		gen_load(ctx, x);
+		if ((op == DIV) && (y->a == 0)) {
+			error(ctx, "divide by zero");
+		} else if ((op == MUL) && (y->a == 1)) {
+			return; // x * 1 = x
+		} else if (((op == LSL) || (op == ASR)) && (y->a == 0)) {
+			return; // shift-by-zero
+		}
+		emit_opi_n(ctx, op, x->r, x->r, y->a);
+	} else {
+		// TODO runtime div-by-zero check
+		// XR = XR op YR
+		gen_load(ctx, x);
+		gen_load(ctx, y);
+		emit_op(ctx, op, x->r, x->r, y->r);
+		put_reg(ctx, y->r);
+	}
+}
+
+void gen_rel_op(Ctx ctx, u32 op, Item x, Item y) {
+	error(ctx, "rel-op unsupported");
+}
+
+void gen_unary_op(Ctx ctx, u32 op, Item x) {
+	if (x->kind == iConst) {
+		if (op == tMINUS) {
+			x->a = - x->a;
+		} else if (op == tBANG) {
+			x->a = ! x->a;
+		} else if (op == tNOT) {
+			x->a = ~ x->a;
+		}
+		return;
+	}
+	u32 t0 = get_reg_tmp(ctx);
+	gen_load(ctx, x);
+	if (op == tMINUS) {
+		emit_mov(ctx, t0, 0);
+		emit_op(ctx, SUB, x->r, t0, x->r);
+	} else if (op == tBANG) {
+		error(ctx, "unary bool not unsupported");
+	} else if (op == tNOT) {
+		emit_mov(ctx, t0, 0xFFFFFFFF);
+		emit_op(ctx, XOR, x->r, x->r, t0);
+	}
+	put_reg(ctx, t0);
 }
 
 void gen_prologue(Ctx ctx, Object fn) {
@@ -1164,7 +1305,7 @@ void gen_end(Ctx ctx) {
 		emit_bi(ctx, AL|L, -((ctx->pc + 4 - obj->value) >> 2));  // BL start
 		emit_mov(ctx, 1, 0xFFFF0000);                     // MOV R1, IOBASE
 		emit_mem(ctx, STW, 0, 1, 0x100);                  // SW R0, [R1, 0x100]
-		emit_br(ctx, AL, -1);                             // B .
+		emit_bi(ctx, AL, -1);                             // B .
 		return;
 	}
 	error(ctx, "no 'start' function\n");
