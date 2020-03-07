@@ -63,6 +63,7 @@ char *tnames[] = {
 typedef struct StringRec* String;
 typedef struct ObjectRec* Object;
 typedef struct ScopeRec* Scope;
+typedef struct FixupRec* Fixup;
 typedef struct TypeRec* Type;
 typedef struct ItemRec* Item;
 typedef struct CtxRec* Ctx;
@@ -70,6 +71,7 @@ typedef struct CtxRec* Ctx;
 typedef struct StringRec StringRec;
 typedef struct ObjectRec ObjectRec;
 typedef struct ScopeRec ScopeRec;
+typedef struct FixupRec FixupRec;
 typedef struct TypeRec TypeRec;
 typedef struct ItemRec ItemRec;
 typedef struct CtxRec CtxRec;
@@ -81,9 +83,23 @@ struct StringRec {
 };
 
 struct ScopeRec {
+	u32 kind;
 	Scope next;    // next in scope stack
 	Object first;  // first object in this scope
 	u32 level;     // height in stack (0 == globals, ...)
+	Fixup fixups;
+};
+
+struct FixupRec {
+	Fixup next;
+	u32 pc;
+};
+
+// Scope Kind IDs
+enum {
+	sBlock,
+	sFunc,
+	sLoop,
 };
 
 // ------------------------------------------------------------------
@@ -182,6 +198,7 @@ struct CtxRec {
 	Object typetab;        // TODO: hashtable
 	Scope scope;           // scope stack
 	ScopeRec global;
+	Object fn;             // function being compiled if non-nil
 
 	Type type_void;
 	Type type_byte;
@@ -205,6 +222,8 @@ void gen_add_op(Ctx ctx, u32 op, Item x, Item y);
 void gen_mul_op(Ctx ctx, u32 op, Item x, Item y);
 void gen_rel_op(Ctx ctx, u32 op, Item x, Item y);
 void gen_unary_op(Ctx ctx, u32 op, Item x);
+void gen_fixups(Ctx ctx, Fixup fixup);
+void gen_store(Ctx ctx, Item val, Item var);
 
 String mkstring(Ctx ctx, const char* text, u32 len) {
 	String str = ctx->strtab;
@@ -622,11 +641,14 @@ void make_global(Ctx ctx, Object obj) {
 
 // push a scope on the scope stack
 // if obj is non-nil, it is the first of a list of items in that scope
-void push_scope(Ctx ctx, Object obj) {
+void push_scope(Ctx ctx, u32 kind, Object obj) {
 	Scope scope = malloc(sizeof(ScopeRec));
-	scope->level = ctx->scope->level + 1;
+	scope->kind = kind;
 	scope->next = ctx->scope;
 	scope->first = obj;
+	scope->level = ctx->scope->level + 1;
+	scope->fixups = nil;
+
 	ctx->scope = scope;
 	// XXX lazy scopes
 }
@@ -635,8 +657,28 @@ void pop_scope(Ctx ctx) {
 	if (ctx->scope->level == 0) {
 		error(ctx, "cannot pop the global scope");
 	}
-	ctx->scope = ctx->scope->next;
+	gen_fixups(ctx, ctx->scope->fixups);
 	// XXX delete?
+	ctx->scope = ctx->scope->next;
+}
+
+// find the first surrounding scope of a specified kind
+Scope find_scope(Ctx ctx, u32 scope_kind) {
+	Scope scope = ctx->scope;
+	while (scope != nil) {
+		if (scope->kind == scope_kind) {
+			return scope;
+		}
+		scope = scope->next;
+	}
+	return nil;
+}
+
+void add_scope_fixup(Ctx ctx, Scope scope) {
+	Fixup fixup = malloc(sizeof(FixupRec));
+	fixup->next = scope->fixups;
+	fixup->pc = ctx->pc - 4;
+	scope->fixups = fixup;
 }
 
 void setitem(Item itm, u32 kind, Type type, u32 r, u32 a, u32 b) {
@@ -706,7 +748,6 @@ void parse_unary_expr(Ctx ctx, Item x) {
 
 void parse_mul_expr(Ctx ctx, Item x) {
 	parse_unary_expr(ctx, x);
-	printf("mul-expr %x\n", ctx->tok);
 	while ((ctx->tok >> 8) == tcMULOP) {
 		u32 op = ctx->tok;
 		next(ctx);
@@ -718,7 +759,6 @@ void parse_mul_expr(Ctx ctx, Item x) {
 
 void parse_add_expr(Ctx ctx, Item x) {
 	parse_mul_expr(ctx, x);
-	printf("add-expr %x\n", ctx->tok);
 	while ((ctx->tok >> 8) == tcADDOP) {
 		u32 op = ctx->tok;
 		next(ctx);
@@ -781,37 +821,107 @@ Type parse_type(Ctx ctx) {
 	return nil;
 }
 
-void parse_function_body(Ctx ctx, Object fn) {
-	gen_prologue(ctx, fn);
-	push_scope(ctx, fn->first);
-	while (true) {
-		if (ctx->tok == tCBRACE) {
+void parse_block(Ctx ctx);
+
+void parse_while(Ctx ctx) {
+	ItemRec x;
+	parse_expr(ctx, &x);
+	require(ctx, tOBRACE);
+	push_scope(ctx, sLoop, nil);
+	parse_block(ctx);
+	pop_scope(ctx);
+}
+
+void parse_if(Ctx ctx) {
+	ItemRec x;
+	parse_expr(ctx, &x);
+	require(ctx, tOBRACE);
+	push_scope(ctx, sBlock, nil);
+	parse_block(ctx);
+	pop_scope(ctx);
+	while (ctx->tok == tELSE) {
+		next(ctx);
+		if (ctx->tok == tIF) {
 			next(ctx);
+			parse_expr(ctx, &x);
+			require(ctx, tOBRACE);
+			push_scope(ctx, sBlock, nil);
+			parse_block(ctx);
 			pop_scope(ctx);
-			gen_epilogue(ctx, fn);
-			return;
-		} else if (ctx->tok == tRETURN) {
-			next(ctx);
-			ItemRec x;
-			if (ctx->tok == tSEMI) {
-				if (fn->type->base != ctx->type_void) {
-					error(ctx, "function requires return type");
-				}
-				next(ctx);
-				x.type = ctx->type_void;
-			} else {
-				parse_expr(ctx, &x);
-				if (!sametype(fn->type->base, x.type)) {
-					error(ctx, "return types do not match");
-				}
-				require(ctx, tSEMI);
-			}
-			gen_return(ctx, &x);
 		} else {
-			expected(ctx, "statement");
+			require(ctx, tOBRACE);
+			push_scope(ctx, sBlock, nil);
+			parse_block(ctx);
+			pop_scope(ctx);
+			break;
 		}
 	}
 }
+
+void parse_return(Ctx ctx) {
+	ItemRec x;
+	if (ctx->tok == tSEMI) {
+		if (ctx->fn->type->base != ctx->type_void) {
+			error(ctx, "function requires return type");
+		}
+		next(ctx);
+		x.type = ctx->type_void;
+	} else {
+		parse_expr(ctx, &x);
+		if (!sametype(ctx->fn->type->base, x.type)) {
+			error(ctx, "return types do not match");
+		}
+		require(ctx, tSEMI);
+	}
+	gen_return(ctx, &x);
+}
+
+void parse_block(Ctx ctx) {
+	while (true) {
+		if (ctx->tok == tCBRACE) {
+			next(ctx);
+			break;
+		} else if (ctx->tok == tRETURN) {
+			next(ctx);
+			parse_return(ctx);
+		} else if (ctx->tok == tWHILE) {
+			next(ctx);
+			parse_while(ctx);
+		} else if (ctx->tok == tIF) {
+			next(ctx);
+			parse_if(ctx);
+		} else if (ctx->tok == tSEMI) {
+			next(ctx);
+			// empty statement
+		} else {
+			ItemRec x;
+			parse_expr(ctx, &x);
+			if (ctx->tok == tASSIGN) {
+				next(ctx);
+				ItemRec y;
+				parse_expr(ctx, &y);
+				gen_store(ctx, &y, &x);
+			} else if ((ctx->tok == tINC) || (ctx->tok == tDEC)) {
+				ItemRec y;
+				setitem(&y, iConst, ctx->type_int32, 0, 1, 0);
+				next(ctx);
+			}
+			require(ctx, tSEMI);
+		}
+	}
+}
+
+void parse_function_body(Ctx ctx, Object fn) {
+	ctx->fn = fn;
+	gen_prologue(ctx, fn);
+	push_scope(ctx, sFunc, fn->first); // scope for parameters
+	push_scope(ctx, sBlock, nil);      // top scope for function body
+	parse_block(ctx);
+	pop_scope(ctx);
+	pop_scope(ctx);
+	gen_epilogue(ctx, fn);
+}
+
 
 Object parse_param(Ctx ctx, String fname, u32 n, Object first, Object last) {
 	if (n == FNMAXARGS) {
@@ -1157,11 +1267,21 @@ void gen_load(Ctx ctx, Item x) {
 	}
 }
 
+void gen_store(Ctx ctx, Item val, Item var) {
+	gen_load(ctx, val);
+	if (var->kind == iParam) {
+		emit_mem(ctx, STW, val->r, SP, 4 + var->a * 4);
+	} else {
+		error(ctx, "gen_store: invalid target");
+	}
+}
+
 void gen_return(Ctx ctx, Item x) {
 	if (x->type != ctx->type_void) {
 		gen_load_reg(ctx, x, R0);
 	}
-	// XXX: branch to epilogue
+	emit_bi(ctx, AL, 0);
+	add_scope_fixup(ctx, find_scope(ctx, sFunc));
 }
 
 void gen_add_op(Ctx ctx, u32 op, Item x, Item y) {
@@ -1261,6 +1381,22 @@ void gen_unary_op(Ctx ctx, u32 op, Item x) {
 		emit_op(ctx, XOR, x->r, x->r, t0);
 	}
 	put_reg(ctx, t0);
+}
+
+void gen_fixups(Ctx ctx, Fixup fixup) {
+	if ((fixup != nil) && (fixup->pc == ctx->pc - 4)) {
+		// if the most recent branch is the
+		// previously emitted instruction, we
+		// can just erase it.
+		ctx->pc -= 4;
+		fixup = fixup->next;
+	}
+	while (fixup != nil) {
+		u32 off = (ctx->pc - fixup->pc - 4) >> 2;
+		u32 ins = ctx->code[fixup->pc >> 2] & 0xFF000000;
+		ctx->code[fixup->pc >> 2] = ins | (off & 0x00FFFFFF);
+		fixup = fixup->next;
+	}
 }
 
 void gen_prologue(Ctx ctx, Object fn) {
