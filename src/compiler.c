@@ -19,6 +19,7 @@
 
 typedef uint32_t u32;
 typedef int32_t i32;
+typedef uint8_t u8;
 
 // token classes (tok >> 8)
 enum {
@@ -27,31 +28,45 @@ enum {
 
 typedef enum {
 	tEOF = 0x000, tEOL = 0x001,
-	tDOT = 0x002, tCOMMA = 0x003, tCOLON = 0x004, tSEMI = 0x005, tBANG = 0x006,
-	tOBRACK = 0x007, tCBRACK = 0x008, tOPAREN = 0x009, tCPAREN = 0x00A,
-	tOBRACE = 0x00B, tCBRACE = 0x00C, tASSIGN = 0x00D,
-	tPLUS = 0x20E, tMINUS = 0x20F, tSTAR = 0x310, tSLASH = 0x311,
-	tPERCENT = 0x312, tAMP = 0x313, tPIPE = 0x214, tCARET = 0x215,
-	tNOT = 0x016, tANDNOT = 0x317, tAND = 0x018, tOR = 0x019,
-	tEQ = 0x11A, tGT = 0x11B, tGE = 0x11C, tLT = 0x11D, tLE = 0x11E, tNE = 0x11F,
-	tLEFT = 0x320, tRIGHT = 0x321, tINC = 0x022, tDEC = 0x023,
+	// RelOps (do not reorder)
+	tEQ = 0x102, tNE = 0x103, tLT = 0x104, tLE = 0x105, tGT = 0x106, tGE = 0x107,
+	// AddOps (do not reorder)
+	tPLUS = 0x208, tMINUS = 0x209, tPIPE = 0x20A, tCARET = 0x20B,
+	// MulOps (do not reorder)
+	tSTAR = 0x30C, tSLASH = 0x30D, tPERCENT = 0x30E, tAMP = 0x30F,
+	tANDNOT = 0x310, tLEFT = 0x311, tRIGHT = 0x312,
+	// UnaryOps
+	tNOT = 0x013,
+	// LogicalOps
+        tAND = 0x014, tOR = 0x015, tBANG = 0x016,
+	// Brackets, Braces, Parens
+	tOBRACK = 0x017, tCBRACK = 0x018, tOPAREN = 0x019, tCPAREN = 0x01A,
+	tOBRACE = 0x01B, tCBRACE = 0x01C,
+	// Various Punctuation
+	tSEMI = 0x01D, tCOLON = 0x1E, tDOT = 0x01F, tCOMMA = 0x020,
+	tINC = 0x021, tDEC = 0x022, tASSIGN = 0x023,
+	// Keywords
 	tVAR = 0x024, tSTRUCT = 0x025, tFUNC = 0x026, tRETURN = 0x027,
 	tIF = 0x028, tELSE = 0x029, tWHILE = 0x02A, tFOR = 0x02B,
 	tBREAK = 0x02C, tCONTINUE = 0x02D, tSWITCH = 0x02E, tCASE = 0x02F,
+	// Special Constants
 	tTRUE = 0x030, tFALSE = 0x031, tNIL = 0x032,
+	// Idenitfiers, Numbers, Strings
 	tNAME = 0x033, tNUMBER = 0x034, tSTRING = 0x035,
 } token_t;
 
 char *tnames[] = {
 	"<EOF>", "<EOL>", 
-	".", ",", ":", ";", "!",
+	"==", "!=", "<", "<=", ">", ">=",
+	"+", "-", "|", "^",
+	"*", "/", "%", "&",
+	"&~", "<<", ">>",
+	"~",
+	"&&", "||", "!",
 	"[", "]", "(", ")",
-	"{", "}", "=",
-	"+", "-", "*", "/",
-	"%", "&", "|", "^",
-	"~", "&~", "&&", "||",
-	"==", ">", ">=", "<", "<=", "!=",
-	"<<", ">>", "++", "--",
+	"{", "}",
+	";", ":", ".", ",",
+	"++", "--", "=",
 	"var", "struct", "func", "return",
 	"if", "else", "while", "for",
 	"break", "continue", "switch", "case",
@@ -59,6 +74,12 @@ char *tnames[] = {
 	"<NAME>", "<NUMBER>", "<STRING>",
 };
 
+// encodings for ops in Items
+enum { rEQ, rGT, rGE, rLT, rLE, rNE }; // RelOps
+enum { aADD, aSUB, aIOR, aXOR }; // AddOps
+enum { mMUL, mDIV, mMOD, mAND, mANN, mLSL, mLSR }; // MulOps
+
+u8 invert_relop_tab[6] = { rNE, rLE, rLT, rGE, rGT, rEQ };
 
 typedef struct StringRec* String;
 typedef struct ObjectRec* Object;
@@ -176,8 +197,10 @@ enum {           // r       a         b
 	iReg,    // regno
 	iRegInd, // regno   offset
 	iCond,   // ccode   f-chain   t-chain
+	iComp,   // comp    regno-a   regno-b
 	iFunc,
 };
+
 
 // Item Flags
 #define ifReadOnly 1
@@ -729,6 +752,10 @@ void setitem(Item itm, u32 kind, Type type, u32 r, u32 a, u32 b) {
 	itm->b = b;
 }
 
+u32 invert_relop(u32 op) {
+	if (op > 5) { abort(); }
+	return invert_relop_tab[op];
+}
 // ================================================================
 
 void parse_expr(Ctx ctx, Item x);
@@ -807,7 +834,11 @@ void parse_unary_expr(Ctx ctx, Item x) {
 		u32 op = ctx->tok;
 		next(ctx);
 		parse_unary_expr(ctx, x);
-		gen_unary_op(ctx, op, x);
+		if ((x->kind == iComp) && (op == tBANG)) {
+			x->r = invert_relop(x->r);
+		} else {
+			gen_unary_op(ctx, op, x);
+		}
 	} else if (ctx->tok == tAMP) {
 		next(ctx);
 		error(ctx, "deref unsupported");
@@ -819,33 +850,33 @@ void parse_unary_expr(Ctx ctx, Item x) {
 void parse_mul_expr(Ctx ctx, Item x) {
 	parse_unary_expr(ctx, x);
 	while ((ctx->tok >> 8) == tcMULOP) {
-		u32 op = ctx->tok;
+		u32 mulop = ctx->tok - tSTAR;
 		next(ctx);
 		ItemRec y;
 		parse_unary_expr(ctx, &y);
-		gen_mul_op(ctx, op, x, &y);
+		gen_mul_op(ctx, mulop, x, &y);
 	}
 }
 
 void parse_add_expr(Ctx ctx, Item x) {
 	parse_mul_expr(ctx, x);
 	while ((ctx->tok >> 8) == tcADDOP) {
-		u32 op = ctx->tok;
+		u32 addop = ctx->tok - tPLUS;
 		next(ctx);
 		ItemRec y;
 		parse_mul_expr(ctx, &y);
-		gen_add_op(ctx, op, x, &y);
+		gen_add_op(ctx, addop, x, &y);
 	}
 }
 
 void parse_rel_expr(Ctx ctx, Item x) {
 	parse_add_expr(ctx, x);
-	while ((ctx->tok >> 8) == tcRELOP) {
-		u32 op = ctx->tok;
+	if ((ctx->tok >> 8) == tcRELOP) {
+		u32 relop = ctx->tok - tEQ;
 		next(ctx);
 		ItemRec y;
 		parse_add_expr(ctx, &y);
-		gen_rel_op(ctx, op, x, &y);
+		gen_rel_op(ctx, relop, x, &y);
 	}
 }
 
@@ -1257,49 +1288,23 @@ void emit_bi(Ctx ctx, u32 op, u32 off) {
 	emit(ctx, ((0xE0 | op) << 24) | (off & 0xffffff));
 }
 
+u8 rel_op_to_cc_tab[6] = { EQ, NE, LT, LE, GT, GE };
+u32 add_op_to_ins_tab[4] = { ADD, SUB, IOR, XOR };
+u32 mul_op_to_ins_tab[7] = { MUL, DIV, MOD, AND, ANN, LSL, ASR };
+
 // ================================================================
 
-const char* item_kind(u32 n) {
-	if (n == iConst) {
-		return "const";
-	} else if (n == iVar) {
-		return "var";
-	} else if (n == iParam) {
-		return "param";
-	} else if (n == iReg) {
-		return "reg";
-	} else if (n == iRegInd) {
-		return "regind";
-	} else if (n == iCond) {
-		return "cond";
-	} else {
-		return "???";
-	}
+u32 rel_op_to_cc(u32 op) {
+	if (op > 5) { abort(); }
+	return rel_op_to_cc_tab[op];
 }
-void print_item(Item x) {
-	fprintf(stderr, "ITEM(%s)%s t=%p r=%u a=%08x b=%08x\n",
-		item_kind(x->kind), (x->flags & ifReadOnly) ? " RO" : "",
-		x->type, x->r, x->a, x->b);
+u32 add_op_to_ins(u32 op) {
+	if (op > 3) { abort(); }
+	return add_op_to_ins_tab[op];
 }
-
-u32 add_op_to_ins(Ctx ctx, u32 op) {
-	if (op == tPLUS) { return ADD; }
-	if (op == tMINUS) { return SUB; }
-	if (op == tPIPE) { return IOR; }
-	if (op == tCARET) { return XOR; }
-	error(ctx, "invalid add-op");
-	return 0;
-}
-u32 mul_op_to_ins(Ctx ctx, u32 op) {
-	if (op == tSTAR) { return MUL; }
-	if (op == tSLASH) { return DIV; }
-	if (op == tPERCENT) { return MOD; }
-	if (op == tLEFT) { return LSL; }
-	if (op == tRIGHT) { return ASR; }
-	if (op == tAMP) { return AND; }
-	if (op == tANDNOT) { return ANN; }
-	error(ctx, "invalid mul-op");
-	return 0;
+u32 mul_op_to_ins(u32 op) {
+	if (op > 6) { abort(); };
+	return mul_op_to_ins_tab[op];
 }
 
 // check to see if the last emitted instruction
@@ -1391,7 +1396,7 @@ void gen_call(Ctx ctx, Item x) {
 }
 
 void gen_add_op(Ctx ctx, u32 op, Item x, Item y) {
-	op = add_op_to_ins(ctx, op);
+	op = add_op_to_ins(op);
 	if ((x->kind == iConst) && (y->kind == iConst)) {
 		// XC = XC op YC
 		if (op == ADD) {
@@ -1420,7 +1425,7 @@ void gen_add_op(Ctx ctx, u32 op, Item x, Item y) {
 }
 
 void gen_mul_op(Ctx ctx, u32 op, Item x, Item y) {
-	op = mul_op_to_ins(ctx, op);
+	op = mul_op_to_ins(op);
 	if ((x->kind == iConst) && (y->kind == iConst)) {
 		// XC = XC op YC
 		if (op == MUL) {
@@ -1470,7 +1475,12 @@ void gen_mul_op(Ctx ctx, u32 op, Item x, Item y) {
 }
 
 void gen_rel_op(Ctx ctx, u32 op, Item x, Item y) {
-	error(ctx, "rel-op unsupported");
+	gen_load(ctx, x);
+	gen_load(ctx, y);
+	x->kind = iComp;
+	x->a = x->r;
+	x->b = y->r;
+	x->r = op;
 }
 
 void gen_unary_op(Ctx ctx, u32 op, Item x) {
@@ -1484,18 +1494,17 @@ void gen_unary_op(Ctx ctx, u32 op, Item x) {
 		}
 		return;
 	}
-	u32 t0 = get_reg_tmp(ctx);
-	gen_load(ctx, x);
-	if (op == tMINUS) {
+	if (op == tBANG) {
+		emit_opi_n(ctx, XOR, x->r, x->r, 1);
+	} else if (op == tNOT) {
+		emit_opi_n(ctx, XOR, x->r, x->r, 0xFFFFFFFF);
+	} else if (op == tMINUS) {
+		u32 t0 = get_reg_tmp(ctx);
+		gen_load(ctx, x);
 		emit_mov(ctx, t0, 0);
 		emit_op(ctx, SUB, x->r, t0, x->r);
-	} else if (op == tBANG) {
-		error(ctx, "unary bool not unsupported");
-	} else if (op == tNOT) {
-		emit_mov(ctx, t0, 0xFFFFFFFF);
-		emit_op(ctx, XOR, x->r, x->r, t0);
+		put_reg(ctx, t0);
 	}
-	put_reg(ctx, t0);
 }
 
 void gen_fixups(Ctx ctx, Fixup fixup) {
