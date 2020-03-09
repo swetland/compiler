@@ -1,5 +1,5 @@
 
-all: bin/tlc bin/fs bin/r5d bin/r5e bin/mkinstab out/test/summary.txt
+all: bin/compiler bin/fs bin/r5d bin/r5e bin/mkinstab out/test/summary.txt
 
 clean:
 	rm -rf bin out
@@ -7,9 +7,9 @@ clean:
 CFLAGS := -Wall -O2 -g
 CC := gcc
 
-bin/tlc: src/tlc.c src/risc5dis.c out/risc5ins.h
+bin/compiler: src/compiler.c src/risc5dis.c out/risc5ins.h
 	@mkdir -p bin
-	$(CC) -o $@ $(CFLAGS) src/tlc.c src/risc5dis.c
+	$(CC) -o $@ $(CFLAGS) src/compiler.c src/risc5dis.c
 
 bin/fs: src/fs.c src/fs.h
 	@mkdir -p bin
@@ -31,7 +31,7 @@ out/risc5ins.h: src/risc5ins.txt bin/mkinstab
 	@mkdir -p out
 	bin/mkinstab < src/risc5ins.txt > $@
 
-out/test/%.txt: test/%.src bin/tlc bin/r5d ./runtest.sh
+out/test/%.txt: test/%.src bin/compiler bin/r5d ./runtest.sh
 	@mkdir -p out/test
 	@rm -f $@
 	@./runtest.sh $< $@

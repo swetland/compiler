@@ -12,7 +12,7 @@ msg="${txt%.txt}.msg"
 gold="${src%.src}.log"
 
 echo "RUNTEST: $src: compiling..."
-if bin/tlc -o "$bin" -l "$lst" "$src" 2> "$msg"; then
+if bin/compiler -o "$bin" -l "$lst" "$src" 2> "$msg"; then
 	# success!
 	if [[ "$txt" == *"-err"* ]]; then
 		# but this was an error test, so...
