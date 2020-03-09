@@ -1,5 +1,5 @@
 
-all: bin/tlc bin/fs bin/r5d bin/r5e bin/mkinstab
+all: bin/tlc bin/fs bin/r5d bin/r5e bin/mkinstab out/test/summary.txt
 
 clean:
 	rm -rf bin out
@@ -30,4 +30,15 @@ bin/mkinstab: src/mkinstab.c
 out/risc5ins.h: src/risc5ins.txt bin/mkinstab
 	@mkdir -p out
 	bin/mkinstab < src/risc5ins.txt > $@
+
+out/test/%.txt: test/%.src bin/tlc bin/r5d ./runtest.sh
+	@mkdir -p out/test
+	@rm -f $@
+	@./runtest.sh $< $@
+
+SRCTESTS := $(sort $(wildcard test/*.src))
+ALLTESTS := $(patsubst test/%.src,out/test/%.txt,$(SRCTESTS))
+
+out/test/summary.txt: $(ALLTESTS)
+	@cat $(ALLTESTS) > out/test/summary.txt
 

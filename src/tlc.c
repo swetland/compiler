@@ -112,6 +112,7 @@ struct ObjectRec {
 	Object first; // list of...
 	Type type;
 	String name;
+	Fixup fixups; // forward func refs
 };
 
 // Object Kind IDs
@@ -175,6 +176,7 @@ enum {           // r       a         b
 	iReg,    // regno
 	iRegInd, // regno   offset
 	iCond,   // ccode   f-chain   t-chain
+	iFunc,
 };
 
 // Item Flags
@@ -215,6 +217,9 @@ struct CtxRec {
 	u32 xref[8192];
 };
 
+#define cfVisibleEOL 1
+#define cfAbortOnError 2
+
 void gen_prologue(Ctx ctx, Object fn);
 void gen_epilogue(Ctx ctx, Object fn);
 void gen_return(Ctx ctx, Item x);
@@ -224,6 +229,8 @@ void gen_rel_op(Ctx ctx, u32 op, Item x, Item y);
 void gen_unary_op(Ctx ctx, u32 op, Item x);
 void gen_fixups(Ctx ctx, Fixup fixup);
 void gen_store(Ctx ctx, Item val, Item var);
+void gen_param(Ctx ctx, u32 n, Item val);
+void gen_call(Ctx, Item func);
 
 String mkstring(Ctx ctx, const char* text, u32 len) {
 	String str = ctx->strtab;
@@ -282,6 +289,7 @@ void init_ctx(Ctx ctx) {
 	ctx->type_string  = mktype(ctx, "str",  3, tString, 8);
 
 	ctx->scope = &(ctx->global);
+	ctx->line = "";
 }
 
 bool sametype(Type a, Type b) {
@@ -326,8 +334,11 @@ void error(Ctx ctx, const char *fmt, ...) {
 	va_end(ap);
 	
 	fprintf(stderr,"\n%.*s\n", len, ctx->line);
-	abort();
-	//exit(1);
+	if (ctx->flags & cfAbortOnError) {
+		abort();
+	} else {
+		exit(1);
+	}
 }
 
 void load(Ctx ctx, const char* filename) {
@@ -466,7 +477,7 @@ token_t _next(Ctx ctx) {
 			ctx->sptr++;
 			ctx->line = ctx->sptr;
 			ctx->xref[ctx->pc / 4] = ctx->linenumber;
-			if (ctx->flags & 1) return ctx->tok = tEOL;
+			if (ctx->flags & cfVisibleEOL) return ctx->tok = tEOL;
 			continue;
 		case ' ':
 		case '\t':
@@ -681,6 +692,13 @@ void add_scope_fixup(Ctx ctx, Scope scope) {
 	scope->fixups = fixup;
 }
 
+void add_object_fixup(Ctx ctx, Object obj) {
+	Fixup fixup = malloc(sizeof(FixupRec));
+	fixup->next = obj->fixups;
+	fixup->pc = ctx->pc - 4;
+	obj->fixups = fixup;
+}
+
 void setitem(Item itm, u32 kind, Type type, u32 r, u32 a, u32 b) {
 	itm->kind = kind;
 	itm->flags = 0;
@@ -694,7 +712,7 @@ void setitem(Item itm, u32 kind, Type type, u32 r, u32 a, u32 b) {
 
 void parse_expr(Ctx ctx, Item x);
 
-void parse_primary_expr(Ctx ctx, Item x) {
+void parse_operand(Ctx ctx, Item x) {
 	if (ctx->tok == tNUMBER) {
 		setitem(x, iConst, ctx->type_int32, 0, ctx->num, 0);
 	} else if (ctx->tok == tSTRING) {
@@ -718,15 +736,46 @@ void parse_primary_expr(Ctx ctx, Item x) {
 		}
 		if (obj->kind == oParam) {
 			setitem(x, iParam, obj->type, 0, obj->value, 0);
+		} else if (obj->kind == oFunc) {
+			setitem(x, iFunc, obj->type, 0, 0, 0);
 		} else {
 			error(ctx, "unsupported identifier");
-		// .ident .ident ...
-		// [ explist ] (array)
-		// ( explist ) (fncall)
-		// const
 		}
 	}
 	next(ctx);
+}
+
+void parse_primary_expr(Ctx ctx, Item x) {
+	parse_operand(ctx, x);
+	while (true) {
+		if (ctx->tok == tOPAREN) {
+			next(ctx);
+			if (x->kind != iFunc) {
+				error(ctx, "cannot call non-function");
+			}
+			// TODO ptr-to-func
+			u32 n = 0;
+			Object param = x->type->first;
+			while (param != nil) {
+				if (n != 0) {
+					require(ctx, tCOMMA);
+				}
+				ItemRec y;
+				parse_expr(ctx, &y);
+				gen_param(ctx, n, &y);
+				param = param->next;
+				n++;
+			}
+			require(ctx, tCPAREN);
+			gen_call(ctx, x);
+		} else if (ctx->tok == tDOT) {
+			error(ctx, "unsupported field deref");
+		} else if (ctx->tok == tOBRACK) {
+			error(ctx, "unsupported array deref");
+		} else {
+			break;
+		}
+	}
 }
 
 void parse_unary_expr(Ctx ctx, Item x) {
@@ -935,6 +984,7 @@ Object parse_param(Ctx ctx, String fname, u32 n, Object first, Object last) {
 	param->first = nil;
 	param->name = parse_name(ctx, "parameter name");
 	param->type = parse_type(ctx);
+	param->fixups = nil;
 
 	Object obj = first;
 	while (obj != nil) {
@@ -970,7 +1020,6 @@ void parse_function(Ctx ctx) {
 			n++;
 		}
 	}
-
 	require(ctx, tCPAREN);
 
 	if ((ctx->tok != tSEMI) && (ctx->tok != tOBRACE)) {
@@ -1035,13 +1084,19 @@ void parse_function(Ctx ctx) {
 		obj->first = first;
 		obj->type = type;
 		obj->name = fname;
+		obj->fixups = nil;
 
 		make_global(ctx, obj);
 	}
 
 	// handle definition if it is one
 	if (isdef) {
+		// patch any forward references
+		gen_fixups(ctx, obj->fixups);
+
+		// mark as defined and save entry address
 		obj->flags |= ofDefined;
+		obj->value = ctx->pc;
 		parse_function_body(ctx, obj);
 	}
 }
@@ -1087,6 +1142,11 @@ u32 get_reg_tmp(Ctx ctx) {
 
 void put_reg(Ctx ctx, u32 r) {
 	//printf("PUT REG %u\n", r);
+	if (r < 8) {
+		// currently we don't strictly track r0..r7
+		// they are used for function calls and returns
+		return;
+	}
 	if (!(ctx->regbits & (1 << r))) {
 		error(ctx, "freeing non-allocated register %u\n", r);
 	}
@@ -1112,6 +1172,7 @@ enum {
 	MHI = 0x2000,
 	MOV_H = 0x2000,
 	MOV_CC = 0x3000,
+	MOD = 0x001B, // fake op for plumbing (DIV+MOV_H)
 };
 
 void emit_op(Ctx ctx, u32 op, u32 a, u32 b, u32 c) {
@@ -1211,11 +1272,11 @@ u32 add_op_to_ins(Ctx ctx, u32 op) {
 u32 mul_op_to_ins(Ctx ctx, u32 op) {
 	if (op == tSTAR) { return MUL; }
 	if (op == tSLASH) { return DIV; }
+	if (op == tPERCENT) { return MOD; }
 	if (op == tLEFT) { return LSL; }
 	if (op == tRIGHT) { return ASR; }
 	if (op == tAMP) { return AND; }
 	if (op == tANDNOT) { return ANN; }
-	// XXX tPERCENT
 	error(ctx, "invalid mul-op");
 	return 0;
 }
@@ -1285,6 +1346,29 @@ void gen_return(Ctx ctx, Item x) {
 	add_scope_fixup(ctx, find_scope(ctx, sFunc));
 }
 
+void gen_param(Ctx ctx, u32 n, Item val) {
+	if (n > 7) {
+		error(ctx, "gen_param - too many parameters");
+	}
+	gen_load_reg(ctx, val, n);
+}
+
+void gen_call(Ctx ctx, Item x) {
+	if (x->type->obj->flags & ofDefined) {
+		u32 fnpc = x->type->obj->value;
+		emit_bi(ctx, AL|L, (fnpc - ctx->pc - 4) >> 2);
+	} else {
+		add_object_fixup(ctx, x->type->obj);
+		emit_bi(ctx, AL|L, 0);
+	}
+	// item becomes the return value
+	x->type = x->type->base;
+	x->kind = iReg;
+	x->r = R0;
+	x->a = 0;
+	x->b = 0;
+}
+
 void gen_add_op(Ctx ctx, u32 op, Item x, Item y) {
 	op = add_op_to_ins(ctx, op);
 	if ((x->kind == iConst) && (y->kind == iConst)) {
@@ -1315,9 +1399,6 @@ void gen_add_op(Ctx ctx, u32 op, Item x, Item y) {
 }
 
 void gen_mul_op(Ctx ctx, u32 op, Item x, Item y) {
-	if (op == tPERCENT) {
-		error(ctx, "mod unsupported");
-	}
 	op = mul_op_to_ins(ctx, op);
 	if ((x->kind == iConst) && (y->kind == iConst)) {
 		// XC = XC op YC
@@ -1325,6 +1406,8 @@ void gen_mul_op(Ctx ctx, u32 op, Item x, Item y) {
 			x->a = x->a * y->a;
 		} else if (op == DIV) {
 			x->a = x->a / y->a;
+		} else if (op == MOD) {
+			x->a = x->a % y->a;
 		} else if (op == LSL) {
 			x->a = x->a << y->a;
 		} else if (op == ASR) {
@@ -1337,20 +1420,30 @@ void gen_mul_op(Ctx ctx, u32 op, Item x, Item y) {
 	} else if (y->kind == iConst) {
 		// XR = XR op YC
 		gen_load(ctx, x);
-		if ((op == DIV) && (y->a == 0)) {
+		if (((op == DIV) || (op == MOD)) && (y->a == 0)) {
 			error(ctx, "divide by zero");
 		} else if ((op == MUL) && (y->a == 1)) {
 			return; // x * 1 = x
 		} else if (((op == LSL) || (op == ASR)) && (y->a == 0)) {
 			return; // shift-by-zero
 		}
-		emit_opi_n(ctx, op, x->r, x->r, y->a);
+		if (op == MOD) {
+			emit_opi_n(ctx, DIV, x->r, x->r, y->a);
+			emit_op(ctx, MOV_H, x->r, 0, 0);
+		} else {
+			emit_opi_n(ctx, op, x->r, x->r, y->a);
+		}
 	} else {
 		// TODO runtime div-by-zero check
 		// XR = XR op YR
 		gen_load(ctx, x);
 		gen_load(ctx, y);
-		emit_op(ctx, op, x->r, x->r, y->r);
+		if (op == MOD) {
+			emit_op(ctx, op, x->r, x->r, y->r);
+			emit_op(ctx, MOV_H, x->r, 0, 0);
+		} else {
+			emit_op(ctx, op, x->r, x->r, y->r);
+		}
 		put_reg(ctx, y->r);
 	}
 }
@@ -1512,21 +1605,49 @@ void gen_listing(Ctx ctx, const char* listfn, const char* srcfn) {
 
 int main(int argc, char **argv) {
 	const char *outname = "out.bin";
-	const char *listname = "out.lst";
+	const char *lstname = nil;
+	const char *srcname = nil;
 
 	CtxRec ctx;
 	init_ctx(&ctx);
-	
-	if (argc < 2) {
-		ctx.filename = "<commandline>";
-		error(&ctx, "no file specified");
+	ctx.filename = "<commandline>";
+
+	while (argc > 1) {
+		if (!strcmp(argv[1],"-o")) {
+			if (argc < 2) {
+				error(&ctx, "option -o requires argument");
+			}
+			outname = argv[2];
+			argc--;
+			argv++;
+		} else if (!strcmp(argv[1], "-l")) {
+			if (argc < 2) {
+				error(&ctx, "option -l requires argument");
+			}
+			lstname = argv[2];
+			argc--;
+			argv++;
+		} else if (!strcmp(argv[1], "-A")) {
+			ctx.flags |= cfAbortOnError;
+		} else if (argv[1][0] == '-') {
+			error(&ctx, "unknown option: %s", argv[1]);
+		} else {
+			if (srcname != nil) {
+				error(&ctx, "multiple source files disallowed");
+			} else {
+				srcname = argv[1];
+			}
+		}
+		argc--;
+		argv++;
 	}
 
-	ctx.filename = argv[1];
-	if (argc == 3)
-		outname = argv[2];
+	if (srcname == nil) {
+		error(&ctx, "no file specified");
+	}
+	ctx.filename = srcname;
 
-	load(&ctx, argv[1]);
+	load(&ctx, srcname);
 	ctx.line = ctx.sptr;
 	ctx.linenumber = 1;
 
@@ -1542,7 +1663,9 @@ int main(int argc, char **argv) {
 	parse_program(&ctx);
 	gen_end(&ctx);
 	gen_write(&ctx, outname);
-	gen_listing(&ctx, listname, ctx.filename);
+	if (lstname != nil) {
+		gen_listing(&ctx, lstname, ctx.filename);
+	}
 #endif
 
 	return 0;
