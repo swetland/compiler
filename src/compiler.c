@@ -220,17 +220,34 @@ struct CtxRec {
 #define cfVisibleEOL 1
 #define cfAbortOnError 2
 
+// generate function prologue and epilogue
 void gen_prologue(Ctx ctx, Object fn);
 void gen_epilogue(Ctx ctx, Object fn);
+
+// return from function, consumes x
 void gen_return(Ctx ctx, Item x);
+
+// generate a binary op, consumes y, transforms x
 void gen_add_op(Ctx ctx, u32 op, Item x, Item y);
 void gen_mul_op(Ctx ctx, u32 op, Item x, Item y);
 void gen_rel_op(Ctx ctx, u32 op, Item x, Item y);
+
+// generate unary op, transforms x
 void gen_unary_op(Ctx ctx, u32 op, Item x);
-void gen_fixups(Ctx ctx, Fixup fixup);
+
+// stores val into var, consuming both
 void gen_store(Ctx ctx, Item val, Item var);
+
+// sets up call param #n, consuming val
 void gen_param(Ctx ctx, u32 n, Item val);
+
+// call func, consumes parameters and func
 void gen_call(Ctx, Item func);
+
+// patches provided list of branch fixups to branch to
+// the address where we will emit the next instruction
+void gen_fixups(Ctx ctx, Fixup fixup);
+
 
 String mkstring(Ctx ctx, const char* text, u32 len) {
 	String str = ctx->strtab;
@@ -685,6 +702,8 @@ Scope find_scope(Ctx ctx, u32 scope_kind) {
 	return nil;
 }
 
+// add a fixup for the last-emitted instruction
+// to the scope (used for return and break)
 void add_scope_fixup(Ctx ctx, Scope scope) {
 	Fixup fixup = malloc(sizeof(FixupRec));
 	fixup->next = scope->fixups;
@@ -692,6 +711,8 @@ void add_scope_fixup(Ctx ctx, Scope scope) {
 	scope->fixups = fixup;
 }
 
+// add a fixup for the last-emitted instruction
+// to the object (used for forward func refs)
 void add_object_fixup(Ctx ctx, Object obj) {
 	Fixup fixup = malloc(sizeof(FixupRec));
 	fixup->next = obj->fixups;
@@ -1358,8 +1379,8 @@ void gen_call(Ctx ctx, Item x) {
 		u32 fnpc = x->type->obj->value;
 		emit_bi(ctx, AL|L, (fnpc - ctx->pc - 4) >> 2);
 	} else {
-		add_object_fixup(ctx, x->type->obj);
 		emit_bi(ctx, AL|L, 0);
+		add_object_fixup(ctx, x->type->obj);
 	}
 	// item becomes the return value
 	x->type = x->type->base;
