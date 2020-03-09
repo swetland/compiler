@@ -35,10 +35,10 @@ out/risc5ins.h: src/risc5ins.txt bin/mkinstab
 	@mkdir -p out
 	bin/mkinstab < src/risc5ins.txt > $@
 
-out/test/%.txt: test/%.src bin/compiler bin/r5d ./runtest.sh
+out/test/%.txt: test/%.src bin/compiler bin/r5d test/runtest.sh
 	@mkdir -p out/test
 	@rm -f $@
-	@./runtest.sh $< $@
+	@test/runtest.sh $< $@
 
 SRCTESTS := $(sort $(wildcard test/*.src))
 ALLTESTS := $(patsubst test/%.src,out/test/%.txt,$(SRCTESTS))
