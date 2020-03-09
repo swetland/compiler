@@ -152,6 +152,7 @@ enum {           // value
 #define ofReadOnly 1
 #define ofPublic   2 
 #define ofDefined  4
+#define ofBuiltin  8 // for builtin functions
 
 // ------------------------------------------------------------------
 
@@ -291,7 +292,7 @@ String mkstring(Ctx ctx, const char* text, u32 len) {
 	return str;
 }
 
-Type mktype(Ctx ctx, const char* text, u32 len, u32 kind, u32 size) {
+Type make_type(Ctx ctx, const char* text, u32 len, u32 kind, u32 size) {
 	String str = mkstring(ctx, text, len);
 	Type type = malloc(sizeof(TypeRec));
 	Object obj = malloc(sizeof(ObjectRec));
@@ -317,19 +318,27 @@ Type mktype(Ctx ctx, const char* text, u32 len, u32 kind, u32 size) {
 	return type;
 }
 
+enum {
+	biPrintHex32,
+};
+
+void make_builtin(Ctx ctx, const char* name, u32 id, Type p0, Type p1, Type rtn);
+
 void init_ctx(Ctx ctx) {
 	memset(ctx, 0, sizeof(CtxRec));
 
 	// install built-in basic types
-	ctx->type_void    = mktype(ctx, "void", 4, tVoid, 0);
-	ctx->type_byte    = mktype(ctx, "byte", 4, tByte, 1);
-	ctx->type_bool    = mktype(ctx, "bool", 4, tBool, 1);
-	ctx->type_int32   = mktype(ctx, "i32",  3, tInt32, 4);
-	ctx->type_nil     = mktype(ctx, "nil",  3, tNil, 4);
-	ctx->type_string  = mktype(ctx, "str",  3, tString, 8);
+	ctx->type_void    = make_type(ctx, "void", 4, tVoid, 0);
+	ctx->type_byte    = make_type(ctx, "byte", 4, tByte, 1);
+	ctx->type_bool    = make_type(ctx, "bool", 4, tBool, 1);
+	ctx->type_int32   = make_type(ctx, "i32",  3, tInt32, 4);
+	ctx->type_nil     = make_type(ctx, "nil",  3, tNil, 4);
+	ctx->type_string  = make_type(ctx, "str",  3, tString, 8);
 
 	ctx->scope = &(ctx->global);
 	ctx->line = "";
+
+	make_builtin(ctx, "_hexout_", biPrintHex32, ctx->type_int32, nil, ctx->type_void);
 }
 
 bool sametype(Type a, Type b) {
@@ -1052,6 +1061,56 @@ Object parse_param(Ctx ctx, String fname, u32 n, Object first, Object last) {
 	return param;
 }
 
+void make_builtin(Ctx ctx, const char* name, u32 id, Type p0, Type p1, Type rtn) {
+	Type type = malloc(sizeof(TypeRec));
+	Object obj = malloc(sizeof(ObjectRec));
+
+	type->kind = tFunc;
+	type->obj = obj;
+	type->first = nil;
+	type->base = rtn;
+	type->len = 0;
+	type->size = 0;
+
+	obj->kind = oFunc;
+	obj->flags = ofBuiltin;
+	obj->value = id;
+	obj->next = nil;
+	obj->first = nil;
+	obj->type = type;
+	obj->name = mkstring(ctx, name, strlen(name));
+	obj->fixups = nil;
+
+	if (p0 != nil) {
+		Object param = malloc(sizeof(ObjectRec));
+		obj->first = param;
+		type->first = param;
+		param->kind = oParam;
+		param->flags = 0;
+		param->value = 0;
+		param->next = nil;
+		param->first = nil;
+		param->name = mkstring(ctx, "a", 1);
+		param->type = p0;
+		param->fixups = nil;
+		type->len = 1;
+		if (p1 != nil) {
+			param->next = malloc(sizeof(ObjectRec));
+			param = param->next;
+			param->kind = oParam;
+			param->flags = 0;
+			param->value = 1;
+			param->next = nil;
+			param->first = nil;
+			param->name = mkstring(ctx, "b", 1);
+			param->type = p1;
+			param->fixups = nil;
+			type->len = 2;
+		}
+	}
+	make_global(ctx, obj);
+}
+
 void parse_function(Ctx ctx) {
 	Object first = nil;
 	Object last = nil;
@@ -1379,8 +1438,19 @@ void gen_param(Ctx ctx, u32 n, Item val) {
 	gen_load_reg(ctx, val, n);
 }
 
+void gen_builtin(Ctx ctx, u32 id) {
+	if (id == biPrintHex32) {
+		emit_mov(ctx, 1, 0xFFFF0000);    // MOV R1, IOBASE
+		emit_mem(ctx, STW, 0, 1, 0x104); // SW R0, [R1, 0x104]
+	} else {
+		error(ctx, "unknown builtin function");
+	}
+}
+
 void gen_call(Ctx ctx, Item x) {
-	if (x->type->obj->flags & ofDefined) {
+	if (x->type->obj->flags & ofBuiltin) {
+		gen_builtin(ctx, x->type->obj->value);
+	} else if (x->type->obj->flags & ofDefined) {
 		u32 fnpc = x->type->obj->value;
 		emit_bi(ctx, AL|L, (fnpc - ctx->pc - 4) >> 2);
 	} else {
@@ -1389,7 +1459,11 @@ void gen_call(Ctx ctx, Item x) {
 	}
 	// item becomes the return value
 	x->type = x->type->base;
-	x->kind = iReg;
+	if (x->type == ctx->type_void) {
+		x->kind = iConst;
+	} else {
+		x->kind = iReg;
+	}
 	x->r = R0;
 	x->a = 0;
 	x->b = 0;
@@ -1494,13 +1568,13 @@ void gen_unary_op(Ctx ctx, u32 op, Item x) {
 		}
 		return;
 	}
+	gen_load(ctx, x);
 	if (op == tBANG) {
 		emit_opi_n(ctx, XOR, x->r, x->r, 1);
 	} else if (op == tNOT) {
 		emit_opi_n(ctx, XOR, x->r, x->r, 0xFFFFFFFF);
 	} else if (op == tMINUS) {
 		u32 t0 = get_reg_tmp(ctx);
-		gen_load(ctx, x);
 		emit_mov(ctx, t0, 0);
 		emit_op(ctx, SUB, x->r, t0, x->r);
 		put_reg(ctx, t0);

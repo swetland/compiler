@@ -35,6 +35,15 @@ out/risc5ins.h: src/risc5ins.txt bin/mkinstab
 	@mkdir -p out
 	bin/mkinstab < src/risc5ins.txt > $@
 
+# have to have two rules here otherwise tests without .log files
+# fail to be compiled by the rule that depends on src+log *or*
+# we fail to depend on the .log for tests with both...
+
+out/test/%.txt: test/%.src test/%.log bin/compiler bin/r5d test/runtest.sh
+	@mkdir -p out/test
+	@rm -f $@
+	@test/runtest.sh $< $@
+
 out/test/%.txt: test/%.src bin/compiler bin/r5d test/runtest.sh
 	@mkdir -p out/test
 	@rm -f $@
