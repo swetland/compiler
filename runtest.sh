@@ -8,11 +8,11 @@ txt="$2"
 bin="${txt%.txt}.bin"
 lst="${txt%.txt}.lst"
 log="${txt%.txt}.log"
+msg="${txt%.txt}.msg"
 gold="${src%.src}.log"
 
 echo "RUNTEST: $src: compiling..."
-#echo "bin/tlc -o $bin -l $lst $src"
-if bin/tlc -o "$bin" -l "$lst" "$src"; then
+if bin/tlc -o "$bin" -l "$lst" "$src" 2> "$msg"; then
 	# success!
 	if [[ "$txt" == *"-err"* ]]; then
 		# but this was an error test, so...
@@ -37,6 +37,7 @@ else
 	# failure
 	if [[ "$txt" == *"-err"* ]]; then
 		# but this was an error test, so...
+		echo "RUNTEST: $src: PASS"
 		echo "PASS: $src" > "$txt"
 	else
 		echo "RUNTEST: $src: FAIL: compiler error"
