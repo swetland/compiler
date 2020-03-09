@@ -4,7 +4,7 @@ all: bin/compiler bin/fs bin/r5d bin/r5e bin/mkinstab out/test/summary.txt
 clean:
 	rm -rf bin out
 
-CFLAGS := -Wall -O2 -g
+CFLAGS := -Wall -O2 -g -Iexternal/oberon-risc-emu -Isrc
 CC := gcc
 
 bin/compiler: src/compiler.c src/risc5dis.c out/risc5ins.h
@@ -19,9 +19,13 @@ bin/r5d: src/r5d.c src/risc5dis.c out/risc5ins.h
 	@mkdir -p bin
 	$(CC) -o $@ $(CFLAGS) src/r5d.c src/risc5dis.c
 
-bin/r5e: src/r5e.c src/risc5emu.c src/risc5emu-fp.c src/risc5dis.c
+RISC5EMU_SRC := \
+	external/oberon-risc-emu/risc5emu.c \
+	external/oberon-risc-emu/risc5emu-fp.c \
+
+bin/r5e: src/r5e.c src/risc5dis.c $(RISC5EMU_SRC)
 	@mkdir -p bin
-	$(CC) -o $@ $(CFLAGS) src/r5e.c src/risc5emu.c src/risc5emu-fp.c src/risc5dis.c
+	$(CC) -o $@ $(CFLAGS) src/r5e.c src/risc5dis.c $(RISC5EMU_SRC)
 
 bin/mkinstab: src/mkinstab.c
 	@mkdir -p bin
