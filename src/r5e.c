@@ -51,7 +51,7 @@ int main(int argc, char** argv) {
 			risc_store_word(r, n, w);
 			n += 4;
 		}
-		fprintf(stderr,"r5e: loaded %u bytes from '%s'\n", n, fn);
+		//fprintf(stderr,"r5e: loaded %u bytes from '%s'\n", n, fn);
 	}
 
 	risc_run(r, 100000);

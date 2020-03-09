@@ -339,11 +339,11 @@ static void risc_store_io(struct RISC *risc, uint32_t address, uint32_t value) {
   if (risc->TRACE) printf("                    io@ 0x%08x = 0x%08x\n", address, value);
   switch (address - IOStart) {
   case 0x100: {
-    printf("%08x\nEXIT\n", value);
+    printf("X %08x\n", value);
     exit(0);
     break;
   case 0x104:
-    printf("%08x\n", value);
+    printf("D %08x\n", value);
     break;
   }
   }
