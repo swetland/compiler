@@ -11,7 +11,7 @@ log="${txt%.txt}.log"
 msg="${txt%.txt}.msg"
 gold="${src%.src}.log"
 
-echo "RUNTEST: $src: compiling..."
+#echo "RUNTEST: $src: compiling..."
 if bin/compiler -o "$bin" -l "$lst" "$src" 2> "$msg"; then
 	# success!
 	if [[ "$txt" == *"-err"* ]]; then
@@ -19,7 +19,7 @@ if bin/compiler -o "$bin" -l "$lst" "$src" 2> "$msg"; then
 		echo "RUNTEST: $src: FAIL: compiler did not detect error"
 		echo "FAIL: $src" > "$txt"
 	else
-		echo "RUNTEST: $src: running..."
+		#echo "RUNTEST: $src: running..."
 		if bin/r5e "$bin" > "$log"; then
 			if diff "$log" "$gold"; then
 				echo "RUNTEST: $src: PASS"

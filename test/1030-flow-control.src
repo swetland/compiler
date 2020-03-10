@@ -1,0 +1,33 @@
+func hex(n i32) {
+	_hexout_(n);
+}
+
+func count(n i32) {
+	while (n > 0) {
+		hex(n);
+		if (n == 3) {
+			break;
+		}
+		n = n - 1;
+	}
+}
+
+func start() i32 {
+	if (true) {
+		hex(0x10101010);
+	} else {
+		hex(0x20202020);
+	}
+
+	if (false) {
+		hex(0x30303030);
+	} else {
+		hex(0x40404040);
+	}
+
+	count(2);
+
+	count(7);
+
+	return 1;
+}

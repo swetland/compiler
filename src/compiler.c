@@ -75,11 +75,11 @@ char *tnames[] = {
 };
 
 // encodings for ops in Items
-enum { rEQ, rGT, rGE, rLT, rLE, rNE }; // RelOps
+enum { rEQ, rNE, rLT, rLE, rGT, rGE }; // RelOps
 enum { aADD, aSUB, aIOR, aXOR }; // AddOps
 enum { mMUL, mDIV, mMOD, mAND, mANN, mLSL, mLSR }; // MulOps
 
-u8 invert_relop_tab[6] = { rNE, rLE, rLT, rGE, rGT, rEQ };
+u8 invert_relop_tab[6] = { rNE, rEQ, rGE, rGT, rLE, rLT };
 
 typedef struct StringRec* String;
 typedef struct ObjectRec* Object;
@@ -198,7 +198,7 @@ enum {           // r       a         b
 	iReg,    // regno
 	iRegInd, // regno   offset
 	iCond,   // ccode   f-chain   t-chain
-	iComp,   // comp    regno-a   regno-b
+	iComp,   // relop   regno-a   regno-b
 	iFunc,
 };
 
@@ -268,10 +268,25 @@ void gen_param(Ctx ctx, u32 n, Item val);
 // call func, consumes parameters and func
 void gen_call(Ctx, Item func);
 
+// generate a forward conditional branch
+// consumes x which must be Bool or Cond
+// returns address to fixup
+u32 gen_branch_cond(Ctx ctx, Item x, bool sense);
+
+// generate a backward branch to addr
+void gen_branch_back(Ctx ctx, u32 addr);
+
+// generate an unconditional forward branch
+// returns address for later fixup
+u32 gen_branch_fwd(Ctx ctx);
+
 // patches provided list of branch fixups to branch to
 // the address where we will emit the next instruction
-void gen_fixups(Ctx ctx, Fixup fixup);
+void fixup_branches_fwd(Ctx ctx, Fixup list);
 
+// patches a single branch at addr to branch to the
+// address where we will emit the next instruction
+void fixup_branch_fwd(Ctx ctx, u32 addr);
 
 String mkstring(Ctx ctx, const char* text, u32 len) {
 	String str = ctx->strtab;
@@ -701,7 +716,7 @@ void make_global(Ctx ctx, Object obj) {
 
 // push a scope on the scope stack
 // if obj is non-nil, it is the first of a list of items in that scope
-void push_scope(Ctx ctx, u32 kind, Object obj) {
+Scope push_scope(Ctx ctx, u32 kind, Object obj) {
 	Scope scope = malloc(sizeof(ScopeRec));
 	scope->kind = kind;
 	scope->next = ctx->scope;
@@ -710,6 +725,7 @@ void push_scope(Ctx ctx, u32 kind, Object obj) {
 	scope->fixups = nil;
 
 	ctx->scope = scope;
+	return scope;
 	// XXX lazy scopes
 }
 
@@ -717,7 +733,7 @@ void pop_scope(Ctx ctx) {
 	if (ctx->scope->level == 0) {
 		error(ctx, "cannot pop the global scope");
 	}
-	gen_fixups(ctx, ctx->scope->fixups);
+	fixup_branches_fwd(ctx, ctx->scope->fixups);
 	// XXX delete?
 	ctx->scope = ctx->scope->next;
 }
@@ -935,37 +951,72 @@ void parse_block(Ctx ctx);
 
 void parse_while(Ctx ctx) {
 	ItemRec x;
+	u32 l0_loop = ctx->pc; // for backward branch
+
 	parse_expr(ctx, &x);
+	u32 l1_br_false = gen_branch_cond(ctx, &x, false);
+
 	require(ctx, tOBRACE);
 	push_scope(ctx, sLoop, nil);
 	parse_block(ctx);
+	gen_branch_back(ctx, l0_loop);
 	pop_scope(ctx);
+
+	fixup_branch_fwd(ctx, l1_br_false);
 }
 
 void parse_if(Ctx ctx) {
+	Scope outer = push_scope(ctx, sBlock, nil);
+
 	ItemRec x;
 	parse_expr(ctx, &x);
+	// branch over "if" code
+	u32 l0_br_false = gen_branch_cond(ctx, &x, false);
+
+	// generate "if" code
 	require(ctx, tOBRACE);
 	push_scope(ctx, sBlock, nil);
 	parse_block(ctx);
 	pop_scope(ctx);
+
+	// branch past "else" code
+	gen_branch_fwd(ctx);
+	add_scope_fixup(ctx, outer);
+
 	while (ctx->tok == tELSE) {
 		next(ctx);
+		fixup_branch_fwd(ctx, l0_br_false);
 		if (ctx->tok == tIF) {
 			next(ctx);
 			parse_expr(ctx, &x);
+			// branch over "if" code
+			l0_br_false = gen_branch_cond(ctx, &x, false);
+
+			// generate "if else" code
 			require(ctx, tOBRACE);
 			push_scope(ctx, sBlock, nil);
 			parse_block(ctx);
 			pop_scope(ctx);
+
+			// branch past "else" code
+			gen_branch_fwd(ctx);
+			add_scope_fixup(ctx, outer);
 		} else {
+			// generate "else" code
 			require(ctx, tOBRACE);
 			push_scope(ctx, sBlock, nil);
 			parse_block(ctx);
 			pop_scope(ctx);
-			break;
+
+			// close outer scope
+			pop_scope(ctx);
+			return; // no further fixups needed
 		}
 	}
+	fixup_branch_fwd(ctx, l0_br_false);
+
+	// close outer scope
+	pop_scope(ctx);
 }
 
 void parse_return(Ctx ctx) {
@@ -986,12 +1037,26 @@ void parse_return(Ctx ctx) {
 	gen_return(ctx, &x);
 }
 
+void parse_break(Ctx ctx) {
+	// XXX break-to-labeled-loop support
+	require(ctx, tSEMI);
+	gen_branch_fwd(ctx);
+	Scope scope = find_scope(ctx,sLoop);
+	if (scope == nil) {
+		error(ctx, "break must be used from inside a looping construct");
+	}
+	add_scope_fixup(ctx, scope);
+}
+
 void parse_block(Ctx ctx) {
 	while (true) {
 		if (ctx->tok == tCBRACE) {
 			next(ctx);
 			break;
 		} else if (ctx->tok == tRETURN) {
+			next(ctx);
+			parse_return(ctx);
+		} else if (ctx->tok == tBREAK) {
 			next(ctx);
 			parse_return(ctx);
 		} else if (ctx->tok == tWHILE) {
@@ -1203,7 +1268,7 @@ void parse_function(Ctx ctx) {
 	// handle definition if it is one
 	if (isdef) {
 		// patch any forward references
-		gen_fixups(ctx, obj->fixups);
+		fixup_branches_fwd(ctx, obj->fixups);
 
 		// mark as defined and save entry address
 		obj->flags |= ofDefined;
@@ -1423,6 +1488,41 @@ void gen_store(Ctx ctx, Item val, Item var) {
 	}
 }
 
+u32 gen_branch_cond(Ctx ctx, Item x, bool sense) {
+	u32 cc;
+	if (x->kind == iComp) {
+		if (sense == false) {
+			x->r = invert_relop(x->r);
+		}
+		emit_op(ctx, SUB, x->a, x->a, x->b);
+		put_reg(ctx, x->a);
+		put_reg(ctx, x->b);
+		cc = rel_op_to_cc(x->r);
+	} else if (x->type == ctx->type_bool) {
+		gen_load(ctx, x);
+		emit_opi(ctx, SUB, x->r, x->r, 1);
+		put_reg(ctx, x->r);
+		if (sense) {
+			cc = EQ;
+		} else {
+			cc = NE;
+		}
+	} else {
+		error(ctx, "conditional branch needs comparison or bool");
+	}
+	emit_bi(ctx, cc, 0);
+	return ctx->pc - 4;
+}
+
+u32 gen_branch_fwd(Ctx ctx) {
+	emit_bi(ctx, AL, 0);
+	return ctx->pc - 4;
+}
+
+void gen_branch_back(Ctx ctx, u32 addr) {
+	emit_bi(ctx, AL, (addr - ctx->pc - 4) >> 2);
+}
+
 void gen_return(Ctx ctx, Item x) {
 	if (x->type != ctx->type_void) {
 		gen_load_reg(ctx, x, R0);
@@ -1581,18 +1681,30 @@ void gen_unary_op(Ctx ctx, u32 op, Item x) {
 	}
 }
 
-void gen_fixups(Ctx ctx, Fixup fixup) {
-	if ((fixup != nil) && (fixup->pc == ctx->pc - 4)) {
-		// if the most recent branch is the
-		// previously emitted instruction, we
-		// can just erase it.
+// patch branch instruction at addr to 
+// branch to current pc
+void fixup_branch_fwd(Ctx ctx, u32 addr) {
+#if 0
+	// disabled for now as this gets tripped up
+	// by stuff like test/1030-flow-control.src (if (n==3) ...)
+	if (addr == ctx->pc - 4) {
+		// if the branch to be patched is the
+		// instruction just previously emitted, we
+		// can simply erase it
 		ctx->pc -= 4;
-		fixup = fixup->next;
+		fprintf(stderr, "DELETED BRANCH @ 0x%x\n", ctx->pc);
+	} else
+#endif
+       	{
+		u32 off = (ctx->pc - addr - 4) >> 2;
+		u32 ins = ctx->code[addr >> 2] & 0xFF000000;
+		ctx->code[addr >> 2] = ins | (off & 0x00FFFFFF);
 	}
+}
+
+void fixup_branches_fwd(Ctx ctx, Fixup fixup) {
 	while (fixup != nil) {
-		u32 off = (ctx->pc - fixup->pc - 4) >> 2;
-		u32 ins = ctx->code[fixup->pc >> 2] & 0xFF000000;
-		ctx->code[fixup->pc >> 2] = ins | (off & 0x00FFFFFF);
+		fixup_branch_fwd(ctx, fixup->pc);
 		fixup = fixup->next;
 	}
 }
