@@ -244,52 +244,55 @@ struct CtxRec {
 #define cfVisibleEOL 1
 #define cfAbortOnError 2
 
+CtxRec ctx;
+
+
 // generate function prologue and epilogue
-void gen_prologue(Ctx ctx, Object fn);
-void gen_epilogue(Ctx ctx, Object fn);
+void gen_prologue(Object fn);
+void gen_epilogue(Object fn);
 
 // return from function, consumes x
-void gen_return(Ctx ctx, Item x);
+void gen_return(Item x);
 
 // generate a binary op, consumes y, transforms x
-void gen_add_op(Ctx ctx, u32 op, Item x, Item y);
-void gen_mul_op(Ctx ctx, u32 op, Item x, Item y);
-void gen_rel_op(Ctx ctx, u32 op, Item x, Item y);
+void gen_add_op(u32 op, Item x, Item y);
+void gen_mul_op(u32 op, Item x, Item y);
+void gen_rel_op(u32 op, Item x, Item y);
 
 // generate unary op, transforms x
-void gen_unary_op(Ctx ctx, u32 op, Item x);
+void gen_unary_op(u32 op, Item x);
 
 // stores val into var, consuming both
-void gen_store(Ctx ctx, Item val, Item var);
+void gen_store(Item val, Item var);
 
 // sets up call param #n, consuming val
-void gen_param(Ctx ctx, u32 n, Item val);
+void gen_param(u32 n, Item val);
 
 // call func, consumes parameters and func
-void gen_call(Ctx, Item func);
+void gen_call(Item func);
 
 // generate a forward conditional branch
 // consumes x which must be Bool or Cond
 // returns address to fixup
-u32 gen_branch_cond(Ctx ctx, Item x, bool sense);
+u32 gen_branch_cond(Item x, bool sense);
 
 // generate a backward branch to addr
-void gen_branch_back(Ctx ctx, u32 addr);
+void gen_branch_back(u32 addr);
 
 // generate an unconditional forward branch
 // returns address for later fixup
-u32 gen_branch_fwd(Ctx ctx);
+u32 gen_branch_fwd();
 
 // patches provided list of branch fixups to branch to
 // the address where we will emit the next instruction
-void fixup_branches_fwd(Ctx ctx, Fixup list);
+void fixup_branches_fwd(Fixup list);
 
 // patches a single branch at addr to branch to the
 // address where we will emit the next instruction
-void fixup_branch_fwd(Ctx ctx, u32 addr);
+void fixup_branch_fwd(u32 addr);
 
-String mkstring(Ctx ctx, const char* text, u32 len) {
-	String str = ctx->strtab;
+String mkstring(const char* text, u32 len) {
+	String str = ctx.strtab;
 	while (str != nil) {
 		if ((str->len == len) && (memcmp(text, str->text, len) == 0)) {
 			return str;
@@ -301,14 +304,14 @@ String mkstring(Ctx ctx, const char* text, u32 len) {
 	str->len = len;
 	memcpy(str->text, text, len);
 	str->text[len] = 0;
-	str->next = ctx->strtab;
-	ctx->strtab = str;
+	str->next = ctx.strtab;
+	ctx.strtab = str;
 
 	return str;
 }
 
-Type make_type(Ctx ctx, const char* text, u32 len, u32 kind, u32 size) {
-	String str = mkstring(ctx, text, len);
+Type make_type(const char* text, u32 len, u32 kind, u32 size) {
+	String str = mkstring(text, len);
 	Type type = malloc(sizeof(TypeRec));
 	Object obj = malloc(sizeof(ObjectRec));
 
@@ -327,8 +330,8 @@ Type make_type(Ctx ctx, const char* text, u32 len, u32 kind, u32 size) {
 	obj->type = type;
 	obj->name = str;
 
-	obj->next = ctx->typetab;
-	ctx->typetab = obj;
+	obj->next = ctx.typetab;
+	ctx.typetab = obj;
 
 	return type;
 }
@@ -337,23 +340,23 @@ enum {
 	biPrintHex32,
 };
 
-void make_builtin(Ctx ctx, const char* name, u32 id, Type p0, Type p1, Type rtn);
+void make_builtin(const char* name, u32 id, Type p0, Type p1, Type rtn);
 
-void init_ctx(Ctx ctx) {
-	memset(ctx, 0, sizeof(CtxRec));
+void init_ctx() {
+	memset(&ctx, 0, sizeof(ctx));
 
 	// install built-in basic types
-	ctx->type_void    = make_type(ctx, "void", 4, tVoid, 0);
-	ctx->type_byte    = make_type(ctx, "byte", 4, tByte, 1);
-	ctx->type_bool    = make_type(ctx, "bool", 4, tBool, 1);
-	ctx->type_int32   = make_type(ctx, "i32",  3, tInt32, 4);
-	ctx->type_nil     = make_type(ctx, "nil",  3, tNil, 4);
-	ctx->type_string  = make_type(ctx, "str",  3, tString, 8);
+	ctx.type_void    = make_type("void", 4, tVoid, 0);
+	ctx.type_byte    = make_type("byte", 4, tByte, 1);
+	ctx.type_bool    = make_type("bool", 4, tBool, 1);
+	ctx.type_int32   = make_type("i32",  3, tInt32, 4);
+	ctx.type_nil     = make_type("nil",  3, tNil, 4);
+	ctx.type_string  = make_type("str",  3, tString, 8);
 
-	ctx->scope = &(ctx->global);
-	ctx->line = "";
+	ctx.scope = &(ctx.global);
+	ctx.line = "";
 
-	make_builtin(ctx, "_hexout_", biPrintHex32, ctx->type_int32, nil, ctx->type_void);
+	make_builtin("_hexout_", biPrintHex32, ctx.type_int32, nil, ctx.type_void);
 }
 
 bool sametype(Type a, Type b) {
@@ -381,52 +384,52 @@ bool sametype(Type a, Type b) {
 	return true;
 }
 
-void error(Ctx ctx, const char *fmt, ...) {
+void error(const char *fmt, ...) {
 	va_list ap;
 
 	u32 len = 0;
-	const char *s = ctx->line;
+	const char *s = ctx.line;
 	while (len < 255) {
 		if ((*s < ' ') && (*s != 9)) break;
 		s++;
 		len++;
 	}
 
-	fprintf(stderr,"%s:%d: ", ctx->filename, ctx->linenumber);
+	fprintf(stderr,"%s:%d: ", ctx.filename, ctx.linenumber);
 	va_start(ap, fmt);
 	vfprintf(stderr, fmt, ap);
 	va_end(ap);
 	
-	fprintf(stderr,"\n%.*s\n", len, ctx->line);
-	if (ctx->flags & cfAbortOnError) {
+	fprintf(stderr,"\n%.*s\n", len, ctx.line);
+	if (ctx.flags & cfAbortOnError) {
 		abort();
 	} else {
 		exit(1);
 	}
 }
 
-void load(Ctx ctx, const char* filename) {
-	ctx->filename = filename;
-	ctx->linenumber = 0;
+void load(const char* filename) {
+	ctx.filename = filename;
+	ctx.linenumber = 0;
 
 	int fd;
 	struct stat s;
 	char* data;
 
 	if ((fd = open(filename, O_RDONLY)) < 0)
-		error(ctx, "cannot open file");
+		error("cannot open file");
 	if (fstat(fd, &s) < 0)
-		error(ctx, "cannot stat file");
+		error("cannot stat file");
 	if ((data = malloc(s.st_size + 1)) == NULL)
-		error(ctx, "cannot allocate memory");
+		error("cannot allocate memory");
 	if (read(fd, data, s.st_size) != s.st_size)
-		error(ctx, "cannot read file");
+		error("cannot read file");
 	close(fd);
 	data[s.st_size] = 0;
 
-	ctx->source = data;
-	ctx->sptr = data;
-	ctx->linenumber = 1;
+	ctx.source = data;
+	ctx.sptr = data;
+	ctx.linenumber = 1;
 }
 
 int unhex(u32 ch) {
@@ -438,15 +441,15 @@ int unhex(u32 ch) {
 	}
 }
 
-token_t next_string(Ctx ctx, const char* s) {
+token_t next_string(const char* s) {
 	u32 ch, len = 0;
 	while (true) {
 		switch ((ch = *s++)) {
-		case 0: error(ctx, "unterminated string");
+		case 0: error("unterminated string");
 		case '"': goto done;
 		case '\\':
 			switch ((ch = *s++)) {
-			case '0': error(ctx, "unterminated string");
+			case '0': error("unterminated string");
 			case 'n': ch = 10; break;
 			case 't': ch = 9; break;
 		  	case '"': ch = '"'; break;
@@ -455,98 +458,98 @@ token_t next_string(Ctx ctx, const char* s) {
 				int x1 = unhex(s[1]);
 				//TODO: if error() is ever non-fatal, this may leave
 				//sptr past end of input
-				if ((x0 < 0) || (x1 < 0)) error(ctx, "invalid hex escape");
+				if ((x0 < 0) || (x1 < 0)) error("invalid hex escape");
 				ch = (x0 << 4) | x1;
 				s += 2;
 				break;
 			}
-			default: error(ctx, "invalid string escape 0x%02x", ch);
+			default: error("invalid string escape 0x%02x", ch);
 			}
 			break;
 		default:
 			break;
 		}
-		if (len == 255) error(ctx, "string constant too long");
-		ctx->tmp[len++] = ch;
+		if (len == 255) error("string constant too long");
+		ctx.tmp[len++] = ch;
 	}
 done:
-	ctx->tmp[len] = 0;
-	ctx->sptr = s;
+	ctx.tmp[len] = 0;
+	ctx.sptr = s;
 	return tSTRING;
 }
 
-token_t next_num(Ctx ctx, u32 n, const char* str, size_t len) {
-	if (len > 255) error(ctx, "number too large");
-	memcpy(ctx->tmp, str, len);
-	ctx->tmp[len] = 0;
-	ctx->num = n;
-	ctx->sptr += len;
-	return ctx->tok = tNUMBER;
+token_t next_num(u32 n, const char* str, size_t len) {
+	if (len > 255) error("number too large");
+	memcpy(ctx.tmp, str, len);
+	ctx.tmp[len] = 0;
+	ctx.num = n;
+	ctx.sptr += len;
+	return ctx.tok = tNUMBER;
 }
 
 int streq(const char* s1, u32 l1, const char* s2, u32 l2) {
 	return (l1 == l2) && (!memcmp(s1, s2, l1));
 }
 
-token_t next_word(Ctx ctx, const char* str, size_t len) {
-	if (len > 255) error(ctx, "word too large");
-	memcpy(ctx->tmp, str, len);
-	ctx->tmp[len] = 0;
-	ctx->num = 0;
-	ctx->sptr += len;
+token_t next_word(const char* str, size_t len) {
+	if (len > 255) error("word too large");
+	memcpy(ctx.tmp, str, len);
+	ctx.tmp[len] = 0;
+	ctx.num = 0;
+	ctx.sptr += len;
 	switch (len) {
 	case 2:
-		if (streq(str, len, "if", 2)) return ctx->tok = tIF;
+		if (streq(str, len, "if", 2)) return ctx.tok = tIF;
 		break;
 	case 3:
-		if (streq(str, len, "for", 3)) return ctx->tok = tFOR;
-		if (streq(str, len, "var", 3)) return ctx->tok = tVAR;
-		if (streq(str, len, "nil", 3)) return ctx->tok = tNIL;
+		if (streq(str, len, "for", 3)) return ctx.tok = tFOR;
+		if (streq(str, len, "var", 3)) return ctx.tok = tVAR;
+		if (streq(str, len, "nil", 3)) return ctx.tok = tNIL;
 		break;
 	case 4:
-		if (streq(str, len, "case", 4)) return ctx->tok = tCASE;
-		if (streq(str, len, "func", 4)) return ctx->tok = tFUNC;
-		if (streq(str, len, "else", 4)) return ctx->tok = tELSE;
-		if (streq(str, len, "true", 4)) return ctx->tok = tTRUE;
+		if (streq(str, len, "case", 4)) return ctx.tok = tCASE;
+		if (streq(str, len, "func", 4)) return ctx.tok = tFUNC;
+		if (streq(str, len, "else", 4)) return ctx.tok = tELSE;
+		if (streq(str, len, "true", 4)) return ctx.tok = tTRUE;
 		break;
 	case 5:
-		if (streq(str, len, "break", 5)) return ctx->tok = tBREAK;
-		if (streq(str, len, "while", 5)) return ctx->tok = tWHILE;
-		if (streq(str, len, "false", 5)) return ctx->tok = tFALSE;
+		if (streq(str, len, "break", 5)) return ctx.tok = tBREAK;
+		if (streq(str, len, "while", 5)) return ctx.tok = tWHILE;
+		if (streq(str, len, "false", 5)) return ctx.tok = tFALSE;
 		break;
 	case 6:
-		if (streq(str, len, "switch", 6)) return ctx->tok = tSWITCH;
-		if (streq(str, len, "struct", 6)) return ctx->tok = tSTRUCT;
-		if (streq(str, len, "return", 6)) return ctx->tok = tRETURN;
+		if (streq(str, len, "switch", 6)) return ctx.tok = tSWITCH;
+		if (streq(str, len, "struct", 6)) return ctx.tok = tSTRUCT;
+		if (streq(str, len, "return", 6)) return ctx.tok = tRETURN;
 		break;
 	case 8:
-		if (streq(str, len, "continue", 8)) return ctx->tok = tCONTINUE;
+		if (streq(str, len, "continue", 8)) return ctx.tok = tCONTINUE;
 		break;
 	}
-	return ctx->tok = tNAME;
+	return ctx.tok = tNAME;
 }
 
-#define TOKEN(t) { ctx->sptr++; return ctx->tok = t; }
-#define TOKEN2(t) { ctx->sptr+=2; return ctx->tok = t; }
+#define TOKEN(t) { ctx.sptr++; return ctx.tok = t; }
+#define TOKEN2(t) { ctx.sptr+=2; return ctx.tok = t; }
 
-token_t _next(Ctx ctx) {
+token_t _next() {
 	while (true) {
-		const char* s = ctx->sptr;
+		const char* s = ctx.sptr;
 
 		switch (*s) {
 		case 0:
-			return ctx->tok = tEOF;
+			return ctx.tok = tEOF;
 		case '\n':
-			ctx->linenumber++;
-			ctx->sptr++;
-			ctx->line = ctx->sptr;
-			ctx->xref[ctx->pc / 4] = ctx->linenumber;
-			if (ctx->flags & cfVisibleEOL) return ctx->tok = tEOL;
+			ctx.linenumber++;
+			ctx.sptr++;
+			ctx.line = ctx.sptr;
+			ctx.xref[ctx.pc / 4] = ctx.linenumber;
+			if (ctx.flags & cfVisibleEOL) return ctx.tok = tEOL;
 			continue;
 		case ' ':
 		case '\t':
 		case '\r':
-			ctx->sptr++;
+			ctx.sptr++;
 			continue;
 		case '0':
 			if (s[1] == 'x') {
@@ -555,7 +558,7 @@ token_t _next(Ctx ctx) {
 				for (;;) {
 					s++;
 					int x = unhex(*s);
-					if (x < 0) return next_num(ctx, n, ctx->sptr, s - ctx->sptr);
+					if (x < 0) return next_num(n, ctx.sptr, s - ctx.sptr);
 					n = (n << 4) | x;
 				}
 			}
@@ -566,7 +569,7 @@ token_t _next(Ctx ctx) {
 					n = (n << 1) | (*s - '0');
 					s++;
 				}
-				return next_num(ctx, n, ctx->sptr, s - ctx->sptr);
+				return next_num(n, ctx.sptr, s - ctx.sptr);
 			}
 		case '1' ... '9': {
 			u32 n = 0;
@@ -576,7 +579,7 @@ token_t _next(Ctx ctx) {
 					n = (n * 10) + (*s - '0');
 					break;
 				default:
-					return next_num(ctx, n, ctx->sptr, s - ctx->sptr);
+					return next_num(n, ctx.sptr, s - ctx.sptr);
 				}
 				s++;
 			}
@@ -593,7 +596,7 @@ token_t _next(Ctx ctx) {
 				case '_':
 					break;
 				default:
-					return next_word(ctx, ctx->sptr, s - ctx->sptr);
+					return next_word(ctx.sptr, s - ctx.sptr);
 				}
 			}
 		case '.': TOKEN(tDOT);
@@ -630,21 +633,21 @@ token_t _next(Ctx ctx) {
 		case '/':
 			if (s[1] == '/') {
 				while ((*s != '\n') && (*s != 0)) s++;
-				ctx->sptr = s;
+				ctx.sptr = s;
 				continue;
 			} else {
 				TOKEN(tSLASH);
 			}
-		case '"': return next_string(ctx, ctx->sptr + 1);
+		case '"': return next_string(ctx.sptr + 1);
 		default:
-			error(ctx, "unknown character '%c' (0x%02x)\n",
+			error("unknown character '%c' (0x%02x)\n",
 			      ((*s > ' ') && (*s < 128)) ? *s : '.', *s);
 		}
 	}
 }
 
-token_t next(Ctx ctx) {
-	return (ctx->tok = _next(ctx));
+token_t next() {
+	return (ctx.tok = _next());
 }
 
 void printstr(const char* s) {
@@ -668,34 +671,34 @@ void printstr(const char* s) {
 	printf("\"");
 }
 
-void print(Ctx ctx) {
-	switch (ctx->tok) {
-	case tNUMBER: printf("#%u ", ctx->num); break;
-	case tNAME:   printf("@%s ", ctx->tmp); break;
+void print() {
+	switch (ctx.tok) {
+	case tNUMBER: printf("#%u ", ctx.num); break;
+	case tNAME:   printf("@%s ", ctx.tmp); break;
 	case tEOL:    printf("\n"); break;
-	case tSTRING: printstr(ctx->tmp); break;
-	default:      printf("%s ", tnames[ctx->tok & 0x7F]); break;
+	case tSTRING: printstr(ctx.tmp); break;
+	default:      printf("%s ", tnames[ctx.tok & 0x7F]); break;
 	}
 }
 
-void expected(Ctx ctx, const char* what) {
-	error(ctx, "expected %s, found %s", what, tnames[ctx->tok & 0x7F]);
+void expected(const char* what) {
+	error("expected %s, found %s", what, tnames[ctx.tok & 0x7F]);
 }
 
-void expect(Ctx ctx, token_t tok) {
-	if (ctx->tok != tok) {
-		error(ctx, "expected %s, found %s", tnames[tok], tnames[ctx->tok & 0x7F]);
+void expect(token_t tok) {
+	if (ctx.tok != tok) {
+		error("expected %s, found %s", tnames[tok], tnames[ctx.tok & 0x7F]);
 	}
 }
 
-void require(Ctx ctx, token_t tok) {
-	expect(ctx, tok);
-	next(ctx);
+void require(token_t tok) {
+	expect(tok);
+	next();
 }
 
 // Look for an identifier in the scope stack
-Object find(Ctx ctx, String str) {
-	Scope scope = ctx->scope;
+Object find(String str) {
+	Scope scope = ctx.scope;
 	while (scope != nil) {
 		Object obj = scope->first;
 		while (obj != nil) {
@@ -709,38 +712,38 @@ Object find(Ctx ctx, String str) {
 	return nil;
 }
 
-void make_global(Ctx ctx, Object obj) {
-	obj->next = ctx->global.first;
-	ctx->global.first = obj;
+void make_global(Object obj) {
+	obj->next = ctx.global.first;
+	ctx.global.first = obj;
 }
 
 // push a scope on the scope stack
 // if obj is non-nil, it is the first of a list of items in that scope
-Scope push_scope(Ctx ctx, u32 kind, Object obj) {
+Scope push_scope(u32 kind, Object obj) {
 	Scope scope = malloc(sizeof(ScopeRec));
 	scope->kind = kind;
-	scope->next = ctx->scope;
+	scope->next = ctx.scope;
 	scope->first = obj;
-	scope->level = ctx->scope->level + 1;
+	scope->level = ctx.scope->level + 1;
 	scope->fixups = nil;
 
-	ctx->scope = scope;
+	ctx.scope = scope;
 	return scope;
 	// XXX lazy scopes
 }
 
-void pop_scope(Ctx ctx) {
-	if (ctx->scope->level == 0) {
-		error(ctx, "cannot pop the global scope");
+void pop_scope() {
+	if (ctx.scope->level == 0) {
+		error("cannot pop the global scope");
 	}
-	fixup_branches_fwd(ctx, ctx->scope->fixups);
+	fixup_branches_fwd(ctx.scope->fixups);
 	// XXX delete?
-	ctx->scope = ctx->scope->next;
+	ctx.scope = ctx.scope->next;
 }
 
 // find the first surrounding scope of a specified kind
-Scope find_scope(Ctx ctx, u32 scope_kind) {
-	Scope scope = ctx->scope;
+Scope find_scope(u32 scope_kind) {
+	Scope scope = ctx.scope;
 	while (scope != nil) {
 		if (scope->kind == scope_kind) {
 			return scope;
@@ -752,19 +755,19 @@ Scope find_scope(Ctx ctx, u32 scope_kind) {
 
 // add a fixup for the last-emitted instruction
 // to the scope (used for return and break)
-void add_scope_fixup(Ctx ctx, Scope scope) {
+void add_scope_fixup(Scope scope) {
 	Fixup fixup = malloc(sizeof(FixupRec));
 	fixup->next = scope->fixups;
-	fixup->pc = ctx->pc - 4;
+	fixup->pc = ctx.pc - 4;
 	scope->fixups = fixup;
 }
 
 // add a fixup for the last-emitted instruction
 // to the object (used for forward func refs)
-void add_object_fixup(Ctx ctx, Object obj) {
+void add_object_fixup(Object obj) {
 	Fixup fixup = malloc(sizeof(FixupRec));
 	fixup->next = obj->fixups;
-	fixup->pc = ctx->pc - 4;
+	fixup->pc = ctx.pc - 4;
 	obj->fixups = fixup;
 }
 
@@ -783,324 +786,324 @@ u32 invert_relop(u32 op) {
 }
 // ================================================================
 
-void parse_expr(Ctx ctx, Item x);
+void parse_expr(Item x);
 
-void parse_operand(Ctx ctx, Item x) {
-	if (ctx->tok == tNUMBER) {
-		setitem(x, iConst, ctx->type_int32, 0, ctx->num, 0);
-	} else if (ctx->tok == tSTRING) {
-		error(ctx, "unsupported string const");
-	} else if (ctx->tok == tTRUE) {
-		setitem(x, iConst, ctx->type_bool, 0, 1, 0);
-	} else if (ctx->tok == tFALSE) {
-		setitem(x, iConst, ctx->type_bool, 0, 0, 0);
-	} else if (ctx->tok == tNIL) {
-		setitem(x, iConst, ctx->type_nil, 0, 0, 0);
-	} else if (ctx->tok == tOPAREN) {
-		next(ctx);
-		parse_expr(ctx, x);
-		require(ctx, tCPAREN);
+void parse_operand(Item x) {
+	if (ctx.tok == tNUMBER) {
+		setitem(x, iConst, ctx.type_int32, 0, ctx.num, 0);
+	} else if (ctx.tok == tSTRING) {
+		error("unsupported string const");
+	} else if (ctx.tok == tTRUE) {
+		setitem(x, iConst, ctx.type_bool, 0, 1, 0);
+	} else if (ctx.tok == tFALSE) {
+		setitem(x, iConst, ctx.type_bool, 0, 0, 0);
+	} else if (ctx.tok == tNIL) {
+		setitem(x, iConst, ctx.type_nil, 0, 0, 0);
+	} else if (ctx.tok == tOPAREN) {
+		next();
+		parse_expr(x);
+		require(tCPAREN);
 		return;
-	} else if (ctx->tok == tNAME) {
-		String str = mkstring(ctx, ctx->tmp, strlen(ctx->tmp));
-		Object obj = find(ctx, str);
+	} else if (ctx.tok == tNAME) {
+		String str = mkstring(ctx.tmp, strlen(ctx.tmp));
+		Object obj = find(str);
 		if (obj == nil) {
-			error(ctx, "unknown identifier '%s'", str->text);
+			error("unknown identifier '%s'", str->text);
 		}
 		if (obj->kind == oParam) {
 			setitem(x, iParam, obj->type, 0, obj->value, 0);
 		} else if (obj->kind == oFunc) {
 			setitem(x, iFunc, obj->type, 0, 0, 0);
 		} else {
-			error(ctx, "unsupported identifier");
+			error("unsupported identifier");
 		}
 	}
-	next(ctx);
+	next();
 }
 
-void parse_primary_expr(Ctx ctx, Item x) {
-	parse_operand(ctx, x);
+void parse_primary_expr(Item x) {
+	parse_operand(x);
 	while (true) {
-		if (ctx->tok == tOPAREN) {
-			next(ctx);
+		if (ctx.tok == tOPAREN) {
+			next();
 			if (x->kind != iFunc) {
-				error(ctx, "cannot call non-function");
+				error("cannot call non-function");
 			}
 			// TODO ptr-to-func
 			u32 n = 0;
 			Object param = x->type->first;
 			while (param != nil) {
 				if (n != 0) {
-					require(ctx, tCOMMA);
+					require(tCOMMA);
 				}
 				ItemRec y;
-				parse_expr(ctx, &y);
-				gen_param(ctx, n, &y);
+				parse_expr(&y);
+				gen_param(n, &y);
 				param = param->next;
 				n++;
 			}
-			require(ctx, tCPAREN);
-			gen_call(ctx, x);
-		} else if (ctx->tok == tDOT) {
-			error(ctx, "unsupported field deref");
-		} else if (ctx->tok == tOBRACK) {
-			error(ctx, "unsupported array deref");
+			require(tCPAREN);
+			gen_call(x);
+		} else if (ctx.tok == tDOT) {
+			error("unsupported field deref");
+		} else if (ctx.tok == tOBRACK) {
+			error("unsupported array deref");
 		} else {
 			break;
 		}
 	}
 }
 
-void parse_unary_expr(Ctx ctx, Item x) {
-	if (ctx->tok == tPLUS) {
-		next(ctx);
-		parse_unary_expr(ctx, x);
-	} else if ((ctx->tok == tMINUS) || (ctx->tok == tBANG) || (ctx->tok == tNOT)) {
-		u32 op = ctx->tok;
-		next(ctx);
-		parse_unary_expr(ctx, x);
+void parse_unary_expr(Item x) {
+	if (ctx.tok == tPLUS) {
+		next();
+		parse_unary_expr(x);
+	} else if ((ctx.tok == tMINUS) || (ctx.tok == tBANG) || (ctx.tok == tNOT)) {
+		u32 op = ctx.tok;
+		next();
+		parse_unary_expr(x);
 		if ((x->kind == iComp) && (op == tBANG)) {
 			x->r = invert_relop(x->r);
 		} else {
-			gen_unary_op(ctx, op, x);
+			gen_unary_op(op, x);
 		}
-	} else if (ctx->tok == tAMP) {
-		next(ctx);
-		error(ctx, "deref unsupported");
+	} else if (ctx.tok == tAMP) {
+		next();
+		error("deref unsupported");
 	} else {
-		parse_primary_expr(ctx, x);
+		parse_primary_expr(x);
 	}
 }
 
-void parse_mul_expr(Ctx ctx, Item x) {
-	parse_unary_expr(ctx, x);
-	while ((ctx->tok >> 8) == tcMULOP) {
-		u32 mulop = ctx->tok - tSTAR;
-		next(ctx);
+void parse_mul_expr(Item x) {
+	parse_unary_expr(x);
+	while ((ctx.tok >> 8) == tcMULOP) {
+		u32 mulop = ctx.tok - tSTAR;
+		next();
 		ItemRec y;
-		parse_unary_expr(ctx, &y);
-		gen_mul_op(ctx, mulop, x, &y);
+		parse_unary_expr(&y);
+		gen_mul_op(mulop, x, &y);
 	}
 }
 
-void parse_add_expr(Ctx ctx, Item x) {
-	parse_mul_expr(ctx, x);
-	while ((ctx->tok >> 8) == tcADDOP) {
-		u32 addop = ctx->tok - tPLUS;
-		next(ctx);
+void parse_add_expr(Item x) {
+	parse_mul_expr(x);
+	while ((ctx.tok >> 8) == tcADDOP) {
+		u32 addop = ctx.tok - tPLUS;
+		next();
 		ItemRec y;
-		parse_mul_expr(ctx, &y);
-		gen_add_op(ctx, addop, x, &y);
+		parse_mul_expr(&y);
+		gen_add_op(addop, x, &y);
 	}
 }
 
-void parse_rel_expr(Ctx ctx, Item x) {
-	parse_add_expr(ctx, x);
-	if ((ctx->tok >> 8) == tcRELOP) {
-		u32 relop = ctx->tok - tEQ;
-		next(ctx);
+void parse_rel_expr(Item x) {
+	parse_add_expr(x);
+	if ((ctx.tok >> 8) == tcRELOP) {
+		u32 relop = ctx.tok - tEQ;
+		next();
 		ItemRec y;
-		parse_add_expr(ctx, &y);
-		gen_rel_op(ctx, relop, x, &y);
+		parse_add_expr(&y);
+		gen_rel_op(relop, x, &y);
 	}
 }
 
-void parse_and_expr(Ctx ctx, Item x) {
-	parse_rel_expr(ctx, x);
-	while (ctx->tok == tAND) {
-		next(ctx);
+void parse_and_expr(Item x) {
+	parse_rel_expr(x);
+	while (ctx.tok == tAND) {
+		next();
 		ItemRec y;
-		parse_rel_expr(ctx, &y);
-		error(ctx, "unsupported and op");
+		parse_rel_expr(&y);
+		error("unsupported and op");
 	}
 }
 
-void parse_expr(Ctx ctx, Item x) {
-	parse_and_expr(ctx, x);
-	while (ctx->tok == tOR) {
-		next(ctx);
+void parse_expr(Item x) {
+	parse_and_expr(x);
+	while (ctx.tok == tOR) {
+		next();
 		ItemRec y;
-		parse_and_expr(ctx, &y);
-		error(ctx, "unsupported or op");
+		parse_and_expr(&y);
+		error("unsupported or op");
 	}
 }
 
-String parse_name(Ctx ctx, const char* what) {
-	if (ctx->tok != tNAME) {
-		error(ctx, "expected %s, found %s", what, tnames[ctx->tok & 0x7F]);
+String parse_name(const char* what) {
+	if (ctx.tok != tNAME) {
+		error("expected %s, found %s", what, tnames[ctx.tok & 0x7F]);
 	}
-	String str = mkstring(ctx, ctx->tmp, strlen(ctx->tmp));
-	next(ctx);
+	String str = mkstring(ctx.tmp, strlen(ctx.tmp));
+	next();
 	return str;
 }
 
-Type parse_type(Ctx ctx) {
-	String tname = parse_name(ctx, "type name");
-	Object obj = ctx->typetab;
+Type parse_type() {
+	String tname = parse_name("type name");
+	Object obj = ctx.typetab;
 	while (obj != nil) {
 		if (obj->name == tname) {
 			return obj->type;
 		}
 		obj = obj->next;
 	}
-	error(ctx, "unknown type name '%s'", tname->text);
+	error("unknown type name '%s'", tname->text);
 	return nil;
 }
 
-void parse_block(Ctx ctx);
+void parse_block();
 
-void parse_while(Ctx ctx) {
+void parse_while() {
 	ItemRec x;
-	u32 l0_loop = ctx->pc; // for backward branch
+	u32 l0_loop = ctx.pc; // for backward branch
 
-	parse_expr(ctx, &x);
-	u32 l1_br_false = gen_branch_cond(ctx, &x, false);
+	parse_expr(&x);
+	u32 l1_br_false = gen_branch_cond(&x, false);
 
-	require(ctx, tOBRACE);
-	push_scope(ctx, sLoop, nil);
-	parse_block(ctx);
-	gen_branch_back(ctx, l0_loop);
-	pop_scope(ctx);
+	require(tOBRACE);
+	push_scope(sLoop, nil);
+	parse_block();
+	gen_branch_back(l0_loop);
+	pop_scope();
 
-	fixup_branch_fwd(ctx, l1_br_false);
+	fixup_branch_fwd(l1_br_false);
 }
 
-void parse_if(Ctx ctx) {
-	Scope outer = push_scope(ctx, sBlock, nil);
+void parse_if() {
+	Scope outer = push_scope(sBlock, nil);
 
 	ItemRec x;
-	parse_expr(ctx, &x);
+	parse_expr(&x);
 	// branch over "if" code
-	u32 l0_br_false = gen_branch_cond(ctx, &x, false);
+	u32 l0_br_false = gen_branch_cond(&x, false);
 
 	// generate "if" code
-	require(ctx, tOBRACE);
-	push_scope(ctx, sBlock, nil);
-	parse_block(ctx);
-	pop_scope(ctx);
+	require(tOBRACE);
+	push_scope(sBlock, nil);
+	parse_block();
+	pop_scope();
 
 	// branch past "else" code
-	gen_branch_fwd(ctx);
-	add_scope_fixup(ctx, outer);
+	gen_branch_fwd();
+	add_scope_fixup(outer);
 
-	while (ctx->tok == tELSE) {
-		next(ctx);
-		fixup_branch_fwd(ctx, l0_br_false);
-		if (ctx->tok == tIF) {
-			next(ctx);
-			parse_expr(ctx, &x);
+	while (ctx.tok == tELSE) {
+		next();
+		fixup_branch_fwd(l0_br_false);
+		if (ctx.tok == tIF) {
+			next();
+			parse_expr(&x);
 			// branch over "if" code
-			l0_br_false = gen_branch_cond(ctx, &x, false);
+			l0_br_false = gen_branch_cond(&x, false);
 
 			// generate "if else" code
-			require(ctx, tOBRACE);
-			push_scope(ctx, sBlock, nil);
-			parse_block(ctx);
-			pop_scope(ctx);
+			require(tOBRACE);
+			push_scope(sBlock, nil);
+			parse_block();
+			pop_scope();
 
 			// branch past "else" code
-			gen_branch_fwd(ctx);
-			add_scope_fixup(ctx, outer);
+			gen_branch_fwd();
+			add_scope_fixup(outer);
 		} else {
 			// generate "else" code
-			require(ctx, tOBRACE);
-			push_scope(ctx, sBlock, nil);
-			parse_block(ctx);
-			pop_scope(ctx);
+			require(tOBRACE);
+			push_scope(sBlock, nil);
+			parse_block();
+			pop_scope();
 
 			// close outer scope
-			pop_scope(ctx);
+			pop_scope();
 			return; // no further fixups needed
 		}
 	}
-	fixup_branch_fwd(ctx, l0_br_false);
+	fixup_branch_fwd(l0_br_false);
 
 	// close outer scope
-	pop_scope(ctx);
+	pop_scope();
 }
 
-void parse_return(Ctx ctx) {
+void parse_return() {
 	ItemRec x;
-	if (ctx->tok == tSEMI) {
-		if (ctx->fn->type->base != ctx->type_void) {
-			error(ctx, "function requires return type");
+	if (ctx.tok == tSEMI) {
+		if (ctx.fn->type->base != ctx.type_void) {
+			error("function requires return type");
 		}
-		next(ctx);
-		x.type = ctx->type_void;
+		next();
+		x.type = ctx.type_void;
 	} else {
-		parse_expr(ctx, &x);
-		if (!sametype(ctx->fn->type->base, x.type)) {
-			error(ctx, "return types do not match");
+		parse_expr(&x);
+		if (!sametype(ctx.fn->type->base, x.type)) {
+			error("return types do not match");
 		}
-		require(ctx, tSEMI);
+		require(tSEMI);
 	}
-	gen_return(ctx, &x);
+	gen_return(&x);
 }
 
-void parse_break(Ctx ctx) {
+void parse_break() {
 	// XXX break-to-labeled-loop support
-	require(ctx, tSEMI);
-	gen_branch_fwd(ctx);
-	Scope scope = find_scope(ctx,sLoop);
+	require(tSEMI);
+	gen_branch_fwd();
+	Scope scope = find_scope(sLoop);
 	if (scope == nil) {
-		error(ctx, "break must be used from inside a looping construct");
+		error("break must be used from inside a looping construct");
 	}
-	add_scope_fixup(ctx, scope);
+	add_scope_fixup(scope);
 }
 
-void parse_block(Ctx ctx) {
+void parse_block() {
 	while (true) {
-		if (ctx->tok == tCBRACE) {
-			next(ctx);
+		if (ctx.tok == tCBRACE) {
+			next();
 			break;
-		} else if (ctx->tok == tRETURN) {
-			next(ctx);
-			parse_return(ctx);
-		} else if (ctx->tok == tBREAK) {
-			next(ctx);
-			parse_return(ctx);
-		} else if (ctx->tok == tWHILE) {
-			next(ctx);
-			parse_while(ctx);
-		} else if (ctx->tok == tIF) {
-			next(ctx);
-			parse_if(ctx);
-		} else if (ctx->tok == tSEMI) {
-			next(ctx);
+		} else if (ctx.tok == tRETURN) {
+			next();
+			parse_return();
+		} else if (ctx.tok == tBREAK) {
+			next();
+			parse_break();
+		} else if (ctx.tok == tWHILE) {
+			next();
+			parse_while();
+		} else if (ctx.tok == tIF) {
+			next();
+			parse_if();
+		} else if (ctx.tok == tSEMI) {
+			next();
 			// empty statement
 		} else {
 			ItemRec x;
-			parse_expr(ctx, &x);
-			if (ctx->tok == tASSIGN) {
-				next(ctx);
+			parse_expr(&x);
+			if (ctx.tok == tASSIGN) {
+				next();
 				ItemRec y;
-				parse_expr(ctx, &y);
-				gen_store(ctx, &y, &x);
-			} else if ((ctx->tok == tINC) || (ctx->tok == tDEC)) {
+				parse_expr(&y);
+				gen_store(&y, &x);
+			} else if ((ctx.tok == tINC) || (ctx.tok == tDEC)) {
 				ItemRec y;
-				setitem(&y, iConst, ctx->type_int32, 0, 1, 0);
-				next(ctx);
+				setitem(&y, iConst, ctx.type_int32, 0, 1, 0);
+				next();
 			}
-			require(ctx, tSEMI);
+			require(tSEMI);
 		}
 	}
 }
 
-void parse_function_body(Ctx ctx, Object fn) {
-	ctx->fn = fn;
-	gen_prologue(ctx, fn);
-	push_scope(ctx, sFunc, fn->first); // scope for parameters
-	push_scope(ctx, sBlock, nil);      // top scope for function body
-	parse_block(ctx);
-	pop_scope(ctx);
-	pop_scope(ctx);
-	gen_epilogue(ctx, fn);
+void parse_function_body(Object fn) {
+	ctx.fn = fn;
+	gen_prologue(fn);
+	push_scope(sFunc, fn->first); // scope for parameters
+	push_scope(sBlock, nil);      // top scope for function body
+	parse_block();
+	pop_scope();
+	pop_scope();
+	gen_epilogue(fn);
 }
 
 
-Object parse_param(Ctx ctx, String fname, u32 n, Object first, Object last) {
+Object parse_param(String fname, u32 n, Object first, Object last) {
 	if (n == FNMAXARGS) {
-		error(ctx, "too many parameters (%d) for '%s'", FNMAXARGS, fname->text);
+		error("too many parameters (%d) for '%s'", FNMAXARGS, fname->text);
 	}
 	Object param = malloc(sizeof(ObjectRec));
 	param->kind = oParam;
@@ -1108,14 +1111,14 @@ Object parse_param(Ctx ctx, String fname, u32 n, Object first, Object last) {
 	param->value = n;
 	param->next = nil;
 	param->first = nil;
-	param->name = parse_name(ctx, "parameter name");
-	param->type = parse_type(ctx);
+	param->name = parse_name("parameter name");
+	param->type = parse_type();
 	param->fixups = nil;
 
 	Object obj = first;
 	while (obj != nil) {
 		if (obj->name == param->name) {
-			error(ctx, "duplicate parameter name '%s'", fname->text);
+			error("duplicate parameter name '%s'", fname->text);
 		}
 		obj = obj->next;
 	}
@@ -1126,7 +1129,7 @@ Object parse_param(Ctx ctx, String fname, u32 n, Object first, Object last) {
 	return param;
 }
 
-void make_builtin(Ctx ctx, const char* name, u32 id, Type p0, Type p1, Type rtn) {
+void make_builtin(const char* name, u32 id, Type p0, Type p1, Type rtn) {
 	Type type = malloc(sizeof(TypeRec));
 	Object obj = malloc(sizeof(ObjectRec));
 
@@ -1143,7 +1146,7 @@ void make_builtin(Ctx ctx, const char* name, u32 id, Type p0, Type p1, Type rtn)
 	obj->next = nil;
 	obj->first = nil;
 	obj->type = type;
-	obj->name = mkstring(ctx, name, strlen(name));
+	obj->name = mkstring(name, strlen(name));
 	obj->fixups = nil;
 
 	if (p0 != nil) {
@@ -1155,7 +1158,7 @@ void make_builtin(Ctx ctx, const char* name, u32 id, Type p0, Type p1, Type rtn)
 		param->value = 0;
 		param->next = nil;
 		param->first = nil;
-		param->name = mkstring(ctx, "a", 1);
+		param->name = mkstring("a", 1);
 		param->type = p0;
 		param->fixups = nil;
 		type->len = 1;
@@ -1167,76 +1170,76 @@ void make_builtin(Ctx ctx, const char* name, u32 id, Type p0, Type p1, Type rtn)
 			param->value = 1;
 			param->next = nil;
 			param->first = nil;
-			param->name = mkstring(ctx, "b", 1);
+			param->name = mkstring("b", 1);
 			param->type = p1;
 			param->fixups = nil;
 			type->len = 2;
 		}
 	}
-	make_global(ctx, obj);
+	make_global(obj);
 }
 
-void parse_function(Ctx ctx) {
+void parse_function() {
 	Object first = nil;
 	Object last = nil;
 	u32 n = 0;
-	String fname = parse_name(ctx, "funcion name");
-	Type ftype = ctx->type_void;
+	String fname = parse_name("funcion name");
+	Type ftype = ctx.type_void;
 
-	require(ctx, tOPAREN);
+	require(tOPAREN);
 
 	// process parameters
-	if (ctx->tok != tCPAREN) {
-		first = parse_param(ctx, fname, n, nil, nil);
+	if (ctx.tok != tCPAREN) {
+		first = parse_param(fname, n, nil, nil);
 		last = first;
 		n++;
-		while (ctx->tok == tCOMMA) {
-			next(ctx);
-			last = parse_param(ctx, fname, n, first, last);
+		while (ctx.tok == tCOMMA) {
+			next();
+			last = parse_param(fname, n, first, last);
 			n++;
 		}
 	}
-	require(ctx, tCPAREN);
+	require(tCPAREN);
 
-	if ((ctx->tok != tSEMI) && (ctx->tok != tOBRACE)) {
-		ftype = parse_type(ctx);
+	if ((ctx.tok != tSEMI) && (ctx.tok != tOBRACE)) {
+		ftype = parse_type();
 	}
 
 	int isdef = 0;
-	if (ctx->tok == tSEMI) {
+	if (ctx.tok == tSEMI) {
 		// declaration
-		next(ctx);
-	} else if (ctx->tok == tOBRACE) {
+		next();
+	} else if (ctx.tok == tOBRACE) {
 		// definition
-		next(ctx);
+		next();
 		isdef = 1;
 	} else {
-		expected(ctx, "semi or open brace");
+		expected("semi or open brace");
 	}
 
 	// Look for an existing declaration or definintion of this function
-	Object obj = find(ctx, fname);
+	Object obj = find(fname);
 	if (obj != nil) {
 		// such a named identifier exists
 		// check to see if we are in agreement with it
 		if (obj->kind != oFunc) {
-			error(ctx, "redefining '%s' as function", fname->text);
+			error("redefining '%s' as function", fname->text);
 		}
 		if (isdef && (obj->flags & ofDefined)) {
-			error(ctx, "redefined function '%s'", fname->text);
+			error("redefined function '%s'", fname->text);
 		}
 		if (ftype != obj->type->base) {
-			error(ctx, "func '%s' return type differs from decl", fname->text);
+			error("func '%s' return type differs from decl", fname->text);
 		}
 		if (obj->type->len != n) {
-			error(ctx, "func '%s' parameter count differs from decl", fname->text);
+			error("func '%s' parameter count differs from decl", fname->text);
 		}
 		Object pa = first;
 		Object pb = obj->type->first;
 		u32 i = 1;
 		while ((pa != nil) && (pb != nil)) {
 			if (!sametype(pa->type, pb->type)) {
-				error(ctx, "func '%s' param %u differs from decl", fname->text, i);
+				error("func '%s' param %u differs from decl", fname->text, i);
 			}
 			pa = pa->next;
 			pb = pb->next;
@@ -1262,76 +1265,76 @@ void parse_function(Ctx ctx) {
 		obj->name = fname;
 		obj->fixups = nil;
 
-		make_global(ctx, obj);
+		make_global(obj);
 	}
 
 	// handle definition if it is one
 	if (isdef) {
 		// patch any forward references
-		fixup_branches_fwd(ctx, obj->fixups);
+		fixup_branches_fwd(obj->fixups);
 
 		// mark as defined and save entry address
 		obj->flags |= ofDefined;
-		obj->value = ctx->pc;
-		parse_function_body(ctx, obj);
+		obj->value = ctx.pc;
+		parse_function_body(obj);
 	}
 }
 
-void parse_global_var(Ctx ctx) {
-	error(ctx, "unsupported");
+void parse_global_var() {
+	error("unsupported");
 }
 
-void parse_program(Ctx ctx) {
-	next(ctx);
+void parse_program() {
+	next();
 	for (;;) {
-		switch (ctx->tok) {
+		switch (ctx.tok) {
 		case tFUNC:
-			next(ctx);
-			parse_function(ctx);
+			next();
+			parse_function();
 			break;
 		case tVAR:
-			next(ctx);
-			parse_global_var(ctx);
+			next();
+			parse_global_var();
 			break;
 		case tEOF:
 			return;
 		default:
-			expected(ctx, "func or var");
+			expected("func or var");
 		}
 	}
 }
 
 // ================================================================
-u32 get_reg_tmp(Ctx ctx) {
+u32 get_reg_tmp() {
 	u32 n = 8;
 	while (n < 12) {
-		if (!(ctx->regbits & (1 << n))) {
-			ctx->regbits |= (1 << n);
+		if (!(ctx.regbits & (1 << n))) {
+			ctx.regbits |= (1 << n);
 			//printf("GET REG %u\n", n);
 			return n;
 		}
 		n++;
 	}
-	error(ctx, "cannot allocate register");
+	error("cannot allocate register");
 	return 0;
 }
 
-void put_reg(Ctx ctx, u32 r) {
+void put_reg(u32 r) {
 	//printf("PUT REG %u\n", r);
 	if (r < 8) {
 		// currently we don't strictly track r0..r7
 		// they are used for function calls and returns
 		return;
 	}
-	if (!(ctx->regbits & (1 << r))) {
-		error(ctx, "freeing non-allocated register %u\n", r);
+	if (!(ctx.regbits & (1 << r))) {
+		error("freeing non-allocated register %u\n", r);
 	}
-	ctx->regbits = ctx->regbits & (~(1 << r));
+	ctx.regbits = ctx.regbits & (~(1 << r));
 }
 
-void emit(Ctx ctx, u32 ins) {
-	ctx->code[ctx->pc / 4] = ins;
-	ctx->pc = ctx->pc + 4;
+void emit(u32 ins) {
+	ctx.code[ctx.pc / 4] = ins;
+	ctx.pc = ctx.pc + 4;
 }
 
 enum {
@@ -1351,53 +1354,53 @@ enum {
 	MOD = 0x001B, // fake op for plumbing (DIV+MOV_H)
 };
 
-void emit_op(Ctx ctx, u32 op, u32 a, u32 b, u32 c) {
-	emit(ctx, (op << 16) | (a << 24) | (b << 20) | c);
+void emit_op(u32 op, u32 a, u32 b, u32 c) {
+	emit((op << 16) | (a << 24) | (b << 20) | c);
 }
-void emit_opi(Ctx ctx, u32 op, u32 a, u32 b, u32 n) {
-	emit(ctx, ((0x4000 | op) << 16) | (a << 24) | (b << 20) | (n & 0xffff));
+void emit_opi(u32 op, u32 a, u32 b, u32 n) {
+	emit(((0x4000 | op) << 16) | (a << 24) | (b << 20) | (n & 0xffff));
 }
 
 // mov (load immediate) using the appropriate one or two
 // instruction form for the immediate argument
-void emit_mov(Ctx ctx, u32 a, u32 n) {
+void emit_mov(u32 a, u32 n) {
 	u32 m = n >> 16;
 	if (m == 0) {
-		emit_opi(ctx, MOV, a, 0, n);
+		emit_opi(MOV, a, 0, n);
 	} else if (m == 0xFFFF) {
-		emit_opi(ctx, MOV | 0x1000, a, 0, n);
+		emit_opi(MOV | 0x1000, a, 0, n);
 	} else {
-		emit_opi(ctx, MHI, a, 0, m);
+		emit_opi(MHI, a, 0, m);
 		if ((n & 0xFFFF) != 0) {
-			emit_opi(ctx, IOR, a, a, n);
+			emit_opi(IOR, a, a, n);
 		}
 	}
 }
 
 // immediate op, using a temporary register and register op if the
 // immediate argument does not fit the single instruction form
-void emit_opi_n(Ctx ctx, u32 op, u32 a, u32 b, u32 n) {
+void emit_opi_n(u32 op, u32 a, u32 b, u32 n) {
 	u32 m = n >> 16;
 	if (m == 0) {
-		emit_opi(ctx, op, a, b, n);
+		emit_opi(op, a, b, n);
 	} else if (m == 0xFFFF) {
-		emit_opi(ctx, op | 0x1000, a, b, n);
+		emit_opi(op | 0x1000, a, b, n);
 	} else {
-		u32 t0 = get_reg_tmp(ctx);
-		emit_opi(ctx, MHI, t0, 0, m);
+		u32 t0 = get_reg_tmp();
+		emit_opi(MHI, t0, 0, m);
 		if ((n & 0xFFFF) != 0) {
-			emit_opi(ctx, IOR, t0, t0, n);
+			emit_opi(IOR, t0, t0, n);
 		}
-		emit_op(ctx, op, a, b, t0);
-		put_reg(ctx, t0);
+		emit_op(op, a, b, t0);
+		put_reg(t0);
 	}
 }
 
 enum {
 	LDW = 8, LDB = 9, STW = 10, STB = 11
 };
-void emit_mem(Ctx ctx, u32 op, u32 a, u32 b, u32 off) {
-	emit(ctx, (op << 28) | (a << 24) | (b << 20) | (off & 0xfffff));
+void emit_mem(u32 op, u32 a, u32 b, u32 off) {
+	emit((op << 28) | (a << 24) | (b << 20) | (off & 0xfffff));
 }
 
 enum {
@@ -1405,11 +1408,11 @@ enum {
 	PL = 8, NE = 9, CC = 10, VC = 11, HI = 12, GE = 13, GT = 14, NV = 15,
 	L = 0x10,
 };
-void emit_br(Ctx ctx, u32 op, u32 r) {
-	emit(ctx, ((0xC0 | op) << 24) | r);
+void emit_br(u32 op, u32 r) {
+	emit(((0xC0 | op) << 24) | r);
 }
-void emit_bi(Ctx ctx, u32 op, u32 off) {
-	emit(ctx, ((0xE0 | op) << 24) | (off & 0xffffff));
+void emit_bi(u32 op, u32 off) {
+	emit(((0xE0 | op) << 24) | (off & 0xffffff));
 }
 
 u8 rel_op_to_cc_tab[6] = { EQ, NE, LT, LE, GT, GE };
@@ -1434,8 +1437,8 @@ u32 mul_op_to_ins(u32 op) {
 // check to see if the last emitted instruction
 // loaded a particular register and if so, patch
 // it to load a different register
-bool patch_last_load(Ctx ctx, u32 oldr, u32 newr) {
-	u32 ins = ctx->code[(ctx->pc - 4) / 4];
+bool patch_last_load(u32 oldr, u32 newr) {
+	u32 ins = ctx.code[(ctx.pc - 4) / 4];
 	u32 n = ins >> 29;
 	if ((n == 0b101) || (n == 0b110) || (n == 0b111)) {
 		// store and branch instructions can be ignored
@@ -1444,27 +1447,27 @@ bool patch_last_load(Ctx ctx, u32 oldr, u32 newr) {
 	if (((ins >> 24) & 15) != oldr) {
 		return false;
 	}
-	ctx->code[(ctx->pc - 4) / 4] = (ins & 0xF0FFFFFF) | (newr << 24);
+	ctx.code[(ctx.pc - 4) / 4] = (ins & 0xF0FFFFFF) | (newr << 24);
 	return true;
 }
 
 // load the value of an item into a specific register
-void gen_load_reg(Ctx ctx, Item x, u32 r) {
+void gen_load_reg(Item x, u32 r) {
 	if (x->kind == iReg) {
 		if (x->r != r) {
-			if (patch_last_load(ctx, x->r, r)) {
-				put_reg(ctx, x->r);
+			if (patch_last_load(x->r, r)) {
+				put_reg(x->r);
 			} else {
-				emit_op(ctx, MOV, r, 0, x->r);
-				put_reg(ctx, x->r);
+				emit_op(MOV, r, 0, x->r);
+				put_reg(x->r);
 			}
 		}
 	} else if (x->kind == iConst) {
-		emit_mov(ctx, r, x->a);
+		emit_mov(r, x->a);
 	} else if (x->kind == iParam) {
-		emit_mem(ctx, LDW, r, SP, 4 + x->a * 4);
+		emit_mem(LDW, r, SP, 4 + x->a * 4);
 	} else {
-		error(ctx, "gen_load failed");
+		error("gen_load failed");
 	}
 	x->kind = iReg;
 	x->r = r;
@@ -1472,94 +1475,94 @@ void gen_load_reg(Ctx ctx, Item x, u32 r) {
 
 // convert an item to value-in-register format
 // if it's not already in that format
-void gen_load(Ctx ctx, Item x) {
+void gen_load(Item x) {
 	if (x->kind != iReg) {
-		gen_load_reg(ctx, x, get_reg_tmp(ctx));
+		gen_load_reg(x, get_reg_tmp());
 	}
 }
 
-void gen_store(Ctx ctx, Item val, Item var) {
-	gen_load(ctx, val);
+void gen_store(Item val, Item var) {
+	gen_load(val);
 	if (var->kind == iParam) {
-		emit_mem(ctx, STW, val->r, SP, 4 + var->a * 4);
-		put_reg(ctx, val->r);
+		emit_mem(STW, val->r, SP, 4 + var->a * 4);
+		put_reg(val->r);
 	} else {
-		error(ctx, "gen_store: invalid target");
+		error("gen_store: invalid target");
 	}
 }
 
-u32 gen_branch_cond(Ctx ctx, Item x, bool sense) {
+u32 gen_branch_cond(Item x, bool sense) {
 	u32 cc;
 	if (x->kind == iComp) {
 		if (sense == false) {
 			x->r = invert_relop(x->r);
 		}
-		emit_op(ctx, SUB, x->a, x->a, x->b);
-		put_reg(ctx, x->a);
-		put_reg(ctx, x->b);
+		emit_op(SUB, x->a, x->a, x->b);
+		put_reg(x->a);
+		put_reg(x->b);
 		cc = rel_op_to_cc(x->r);
-	} else if (x->type == ctx->type_bool) {
-		gen_load(ctx, x);
-		emit_opi(ctx, SUB, x->r, x->r, 1);
-		put_reg(ctx, x->r);
+	} else if (x->type == ctx.type_bool) {
+		gen_load(x);
+		emit_opi(SUB, x->r, x->r, 1);
+		put_reg(x->r);
 		if (sense) {
 			cc = EQ;
 		} else {
 			cc = NE;
 		}
 	} else {
-		error(ctx, "conditional branch needs comparison or bool");
+		error("conditional branch needs comparison or bool");
 	}
-	emit_bi(ctx, cc, 0);
-	return ctx->pc - 4;
+	emit_bi(cc, 0);
+	return ctx.pc - 4;
 }
 
-u32 gen_branch_fwd(Ctx ctx) {
-	emit_bi(ctx, AL, 0);
-	return ctx->pc - 4;
+u32 gen_branch_fwd() {
+	emit_bi(AL, 0);
+	return ctx.pc - 4;
 }
 
-void gen_branch_back(Ctx ctx, u32 addr) {
-	emit_bi(ctx, AL, (addr - ctx->pc - 4) >> 2);
+void gen_branch_back(u32 addr) {
+	emit_bi(AL, (addr - ctx.pc - 4) >> 2);
 }
 
-void gen_return(Ctx ctx, Item x) {
-	if (x->type != ctx->type_void) {
-		gen_load_reg(ctx, x, R0);
+void gen_return(Item x) {
+	if (x->type != ctx.type_void) {
+		gen_load_reg(x, R0);
 	}
-	emit_bi(ctx, AL, 0);
-	add_scope_fixup(ctx, find_scope(ctx, sFunc));
+	emit_bi(AL, 0);
+	add_scope_fixup(find_scope(sFunc));
 }
 
-void gen_param(Ctx ctx, u32 n, Item val) {
+void gen_param(u32 n, Item val) {
 	if (n > 7) {
-		error(ctx, "gen_param - too many parameters");
+		error("gen_param - too many parameters");
 	}
-	gen_load_reg(ctx, val, n);
+	gen_load_reg(val, n);
 }
 
-void gen_builtin(Ctx ctx, u32 id) {
+void gen_builtin(u32 id) {
 	if (id == biPrintHex32) {
-		emit_mov(ctx, 1, 0xFFFF0000);    // MOV R1, IOBASE
-		emit_mem(ctx, STW, 0, 1, 0x104); // SW R0, [R1, 0x104]
+		emit_mov(1, 0xFFFF0000);    // MOV R1, IOBASE
+		emit_mem(STW, 0, 1, 0x104); // SW R0, [R1, 0x104]
 	} else {
-		error(ctx, "unknown builtin function");
+		error("unknown builtin function");
 	}
 }
 
-void gen_call(Ctx ctx, Item x) {
+void gen_call(Item x) {
 	if (x->type->obj->flags & ofBuiltin) {
-		gen_builtin(ctx, x->type->obj->value);
+		gen_builtin(x->type->obj->value);
 	} else if (x->type->obj->flags & ofDefined) {
 		u32 fnpc = x->type->obj->value;
-		emit_bi(ctx, AL|L, (fnpc - ctx->pc - 4) >> 2);
+		emit_bi(AL|L, (fnpc - ctx.pc - 4) >> 2);
 	} else {
-		emit_bi(ctx, AL|L, 0);
-		add_object_fixup(ctx, x->type->obj);
+		emit_bi(AL|L, 0);
+		add_object_fixup(x->type->obj);
 	}
 	// item becomes the return value
 	x->type = x->type->base;
-	if (x->type == ctx->type_void) {
+	if (x->type == ctx.type_void) {
 		x->kind = iConst;
 	} else {
 		x->kind = iReg;
@@ -1569,7 +1572,7 @@ void gen_call(Ctx ctx, Item x) {
 	x->b = 0;
 }
 
-void gen_add_op(Ctx ctx, u32 op, Item x, Item y) {
+void gen_add_op(u32 op, Item x, Item y) {
 	op = add_op_to_ins(op);
 	if ((x->kind == iConst) && (y->kind == iConst)) {
 		// XC = XC op YC
@@ -1584,21 +1587,21 @@ void gen_add_op(Ctx ctx, u32 op, Item x, Item y) {
 		}
 	} else if (y->kind == iConst) {
 		// XR = XR op YC
-		gen_load(ctx, x);
+		gen_load(x);
 		// for all of these, rhs==0 is no-op
 		if (y->a != 0) {
-			emit_opi_n(ctx, op, x->r, x->r, y->a);
+			emit_opi_n(op, x->r, x->r, y->a);
 		}
 	} else {
 		// XR = XR op YR
-		gen_load(ctx, x);
-		gen_load(ctx, y);
-		emit_op(ctx, op, x->r, x->r, y->r);
-		put_reg(ctx, y->r);
+		gen_load(x);
+		gen_load(y);
+		emit_op(op, x->r, x->r, y->r);
+		put_reg(y->r);
 	}
 }
 
-void gen_mul_op(Ctx ctx, u32 op, Item x, Item y) {
+void gen_mul_op(u32 op, Item x, Item y) {
 	op = mul_op_to_ins(op);
 	if ((x->kind == iConst) && (y->kind == iConst)) {
 		// XC = XC op YC
@@ -1619,45 +1622,45 @@ void gen_mul_op(Ctx ctx, u32 op, Item x, Item y) {
 		}
 	} else if (y->kind == iConst) {
 		// XR = XR op YC
-		gen_load(ctx, x);
+		gen_load(x);
 		if (((op == DIV) || (op == MOD)) && (y->a == 0)) {
-			error(ctx, "divide by zero");
+			error("divide by zero");
 		} else if ((op == MUL) && (y->a == 1)) {
 			return; // x * 1 = x
 		} else if (((op == LSL) || (op == ASR)) && (y->a == 0)) {
 			return; // shift-by-zero
 		}
 		if (op == MOD) {
-			emit_opi_n(ctx, DIV, x->r, x->r, y->a);
-			emit_op(ctx, MOV_H, x->r, 0, 0);
+			emit_opi_n(DIV, x->r, x->r, y->a);
+			emit_op(MOV_H, x->r, 0, 0);
 		} else {
-			emit_opi_n(ctx, op, x->r, x->r, y->a);
+			emit_opi_n(op, x->r, x->r, y->a);
 		}
 	} else {
 		// TODO runtime div-by-zero check
 		// XR = XR op YR
-		gen_load(ctx, x);
-		gen_load(ctx, y);
+		gen_load(x);
+		gen_load(y);
 		if (op == MOD) {
-			emit_op(ctx, op, x->r, x->r, y->r);
-			emit_op(ctx, MOV_H, x->r, 0, 0);
+			emit_op(op, x->r, x->r, y->r);
+			emit_op(MOV_H, x->r, 0, 0);
 		} else {
-			emit_op(ctx, op, x->r, x->r, y->r);
+			emit_op(op, x->r, x->r, y->r);
 		}
-		put_reg(ctx, y->r);
+		put_reg(y->r);
 	}
 }
 
-void gen_rel_op(Ctx ctx, u32 op, Item x, Item y) {
-	gen_load(ctx, x);
-	gen_load(ctx, y);
+void gen_rel_op(u32 op, Item x, Item y) {
+	gen_load(x);
+	gen_load(y);
 	x->kind = iComp;
 	x->a = x->r;
 	x->b = y->r;
 	x->r = op;
 }
 
-void gen_unary_op(Ctx ctx, u32 op, Item x) {
+void gen_unary_op(u32 op, Item x) {
 	if (x->kind == iConst) {
 		if (op == tMINUS) {
 			x->a = - x->a;
@@ -1668,104 +1671,104 @@ void gen_unary_op(Ctx ctx, u32 op, Item x) {
 		}
 		return;
 	}
-	gen_load(ctx, x);
+	gen_load(x);
 	if (op == tBANG) {
-		emit_opi_n(ctx, XOR, x->r, x->r, 1);
+		emit_opi_n(XOR, x->r, x->r, 1);
 	} else if (op == tNOT) {
-		emit_opi_n(ctx, XOR, x->r, x->r, 0xFFFFFFFF);
+		emit_opi_n(XOR, x->r, x->r, 0xFFFFFFFF);
 	} else if (op == tMINUS) {
-		u32 t0 = get_reg_tmp(ctx);
-		emit_mov(ctx, t0, 0);
-		emit_op(ctx, SUB, x->r, t0, x->r);
-		put_reg(ctx, t0);
+		u32 t0 = get_reg_tmp();
+		emit_mov(t0, 0);
+		emit_op(SUB, x->r, t0, x->r);
+		put_reg(t0);
 	}
 }
 
 // patch branch instruction at addr to 
 // branch to current pc
-void fixup_branch_fwd(Ctx ctx, u32 addr) {
+void fixup_branch_fwd(u32 addr) {
 #if 0
 	// disabled for now as this gets tripped up
 	// by stuff like test/1030-flow-control.src (if (n==3) ...)
-	if (addr == ctx->pc - 4) {
+	if (addr == ctx.pc - 4) {
 		// if the branch to be patched is the
 		// instruction just previously emitted, we
 		// can simply erase it
-		ctx->pc -= 4;
-		fprintf(stderr, "DELETED BRANCH @ 0x%x\n", ctx->pc);
+		ctx.pc -= 4;
+		fprintf(stderr, "DELETED BRANCH @ 0x%x\n", ctx.pc);
 	} else
 #endif
        	{
-		u32 off = (ctx->pc - addr - 4) >> 2;
-		u32 ins = ctx->code[addr >> 2] & 0xFF000000;
-		ctx->code[addr >> 2] = ins | (off & 0x00FFFFFF);
+		u32 off = (ctx.pc - addr - 4) >> 2;
+		u32 ins = ctx.code[addr >> 2] & 0xFF000000;
+		ctx.code[addr >> 2] = ins | (off & 0x00FFFFFF);
 	}
 }
 
-void fixup_branches_fwd(Ctx ctx, Fixup fixup) {
+void fixup_branches_fwd(Fixup fixup) {
 	while (fixup != nil) {
-		fixup_branch_fwd(ctx, fixup->pc);
+		fixup_branch_fwd(fixup->pc);
 		fixup = fixup->next;
 	}
 }
 
-void gen_prologue(Ctx ctx, Object fn) {
-	fn->value = ctx->pc;
-	emit_opi(ctx, SUB, SP, SP, 4 + fn->type->len * 4);
-	emit_mem(ctx, STW, LR, SP, 0);
+void gen_prologue(Object fn) {
+	fn->value = ctx.pc;
+	emit_opi(SUB, SP, SP, 4 + fn->type->len * 4);
+	emit_mem(STW, LR, SP, 0);
 
 	Object param = fn->first;
 	u32 r = 0;
 	while (param != nil) {
-		emit_mem(ctx, STW, r, SP, (r + 1) * 4);
+		emit_mem(STW, r, SP, (r + 1) * 4);
 		r++;
 		param = param->next;
 	}
 }
 
-void gen_epilogue(Ctx ctx, Object fn) {
-	emit_mem(ctx, LDW, LR, SP, 0);
-	emit_opi(ctx, ADD, SP, SP, 4 + fn->type->len * 4);
-	emit_br(ctx, AL, LR);
+void gen_epilogue(Object fn) {
+	emit_mem(LDW, LR, SP, 0);
+	emit_opi(ADD, SP, SP, 4 + fn->type->len * 4);
+	emit_br(AL, LR);
 }
 
 
-void gen_start(Ctx ctx) {
+void gen_start() {
 	// placeholder branch to init
-	emit_bi(ctx, AL, 0);
+	emit_bi(AL, 0);
 }
 
-void gen_end(Ctx ctx) {
-	ctx->code[0] |= (ctx->pc - 4) >> 2; // patch branch at 0
+void gen_end() {
+	ctx.code[0] |= (ctx.pc - 4) >> 2; // patch branch at 0
 
-	String str = mkstring(ctx, "start", 5);
-	Object obj = find(ctx, str);
+	String str = mkstring("start", 5);
+	Object obj = find(str);
 	while (obj != nil) {
 		if (obj->type->kind != tFunc) {
-			error(ctx, "'start' is not a function\n");
+			error("'start' is not a function\n");
 		}
 		if (obj->first != nil) {
-			error(ctx, "'start' must have no parameters\n");
+			error("'start' must have no parameters\n");
 		}
-		emit_mov(ctx, 14, 0x100000);                      // MOV SP, RAMTOP
-		emit_bi(ctx, AL|L, -((ctx->pc + 4 - obj->value) >> 2));  // BL start
-		emit_mov(ctx, 1, 0xFFFF0000);                     // MOV R1, IOBASE
-		emit_mem(ctx, STW, 0, 1, 0x100);                  // SW R0, [R1, 0x100]
-		emit_bi(ctx, AL, -1);                             // B .
+		emit_mov(14, 0x100000);                      // MOV SP, RAMTOP
+		emit_bi(AL|L, -((ctx.pc + 4 - obj->value) >> 2));  // BL start
+		emit_mov(1, 0xFFFF0000);                     // MOV R1, IOBASE
+		emit_mem(STW, 0, 1, 0x100);                  // SW R0, [R1, 0x100]
+		emit_bi(AL, -1);                             // B .
 		return;
 	}
-	error(ctx, "no 'start' function\n");
+	error("no 'start' function\n");
 }
 
-void gen_write(Ctx ctx, const char* outname) {
+void gen_write(const char* outname) {
 	int fd = open(outname, O_CREAT | O_TRUNC | O_WRONLY, 0644);
 	if (fd < 0) {
-		error(ctx, "cannot open '%s' to write", outname);
+		error("cannot open '%s' to write", outname);
 	}
 	u32 n = 0;
-	while (n < ctx->pc) {
-		if (write(fd, ctx->code + (n/4), sizeof(u32)) != sizeof(u32)) {
-			error(ctx, "error writing '%s'", outname);
+	while (n < ctx.pc) {
+		if (write(fd, ctx.code + (n/4), sizeof(u32)) != sizeof(u32)) {
+			error("error writing '%s'", outname);
 		}
 		n += 4;
 	}
@@ -1774,23 +1777,23 @@ void gen_write(Ctx ctx, const char* outname) {
 
 #include "risc5.h"
 
-void gen_listing(Ctx ctx, const char* listfn, const char* srcfn) {
+void gen_listing(const char* listfn, const char* srcfn) {
 	FILE* fin = fopen(srcfn, "r");
 	if (fin == NULL) {
-		error(ctx, "cannot re-read '%s'\n", srcfn);
+		error("cannot re-read '%s'\n", srcfn);
 	}
 	FILE* fout = fopen(listfn, "w");
 	if (fout == NULL) {
-		error(ctx, "cannot write '%s'\n", listfn);
+		error("cannot write '%s'\n", listfn);
 	}
 	u32 n = 0;
 	u32 line = 1;
 	char buf[1024];
-	while (n < ctx->pc) {
-		u32 ins = ctx->code[n/4];
-		if ((line < ctx->xref[n/4]) && fin) {
+	while (n < ctx.pc) {
+		u32 ins = ctx.code[n/4];
+		if ((line < ctx.xref[n/4]) && fin) {
 			fprintf(fout, "\n");
-			while (line < ctx->xref[n/4]) {
+			while (line < ctx.xref[n/4]) {
 				if (fgets(buf, sizeof(buf), fin) == nil) {
 					fin = nil;
 					break;
@@ -1824,21 +1827,20 @@ int main(int argc, char **argv) {
 	const char *lstname = nil;
 	const char *srcname = nil;
 
-	CtxRec ctx;
-	init_ctx(&ctx);
+	init_ctx();
 	ctx.filename = "<commandline>";
 
 	while (argc > 1) {
 		if (!strcmp(argv[1],"-o")) {
 			if (argc < 2) {
-				error(&ctx, "option -o requires argument");
+				error("option -o requires argument");
 			}
 			outname = argv[2];
 			argc--;
 			argv++;
 		} else if (!strcmp(argv[1], "-l")) {
 			if (argc < 2) {
-				error(&ctx, "option -l requires argument");
+				error("option -l requires argument");
 			}
 			lstname = argv[2];
 			argc--;
@@ -1846,10 +1848,10 @@ int main(int argc, char **argv) {
 		} else if (!strcmp(argv[1], "-A")) {
 			ctx.flags |= cfAbortOnError;
 		} else if (argv[1][0] == '-') {
-			error(&ctx, "unknown option: %s", argv[1]);
+			error("unknown option: %s", argv[1]);
 		} else {
 			if (srcname != nil) {
-				error(&ctx, "multiple source files disallowed");
+				error("multiple source files disallowed");
 			} else {
 				srcname = argv[1];
 			}
@@ -1859,28 +1861,28 @@ int main(int argc, char **argv) {
 	}
 
 	if (srcname == nil) {
-		error(&ctx, "no file specified");
+		error("no file specified");
 	}
 	ctx.filename = srcname;
 
-	load(&ctx, srcname);
+	load(srcname);
 	ctx.line = ctx.sptr;
 	ctx.linenumber = 1;
 
 #if 0
-	ctx->flags |= 1;
+	ctx.flags |= 1;
 	do {
-		next(&ctx);
-		print(&ctx);
+		next();
+		print();
 	} while (ctx.tok != tEOF);
 	printf("\n");
 #else
-	gen_start(&ctx);
-	parse_program(&ctx);
-	gen_end(&ctx);
-	gen_write(&ctx, outname);
+	gen_start();
+	parse_program();
+	gen_end();
+	gen_write(outname);
 	if (lstname != nil) {
-		gen_listing(&ctx, lstname, ctx.filename);
+		gen_listing(lstname, ctx.filename);
 	}
 #endif
 
