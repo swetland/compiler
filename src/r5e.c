@@ -5,19 +5,17 @@
 
 #include "risc5emu.h"
 
-uint32_t data[] = {
-	0x4000FFD2, // mov r0, 0xFFD2
-	0x51000100, // mov r1, 0xffff0100
-	0xA0100000, // sw r0, [r1, 0]
-	0xE7FFFFFF, // b -1
-};
-
 int main(int argc, char** argv) {
 	bool trace = false;
 	const char* fn = NULL;
+	int args = 0;
 
 	while (argc > 1) {
-		if (!strcmp(argv[1], "-t")) {
+		if (!strcmp(argv[1], "--")) {
+			args = argc - 2;
+			argv += 2;
+			break;
+		} else if (!strcmp(argv[1], "-t")) {
 			trace = true;
 		} else if (argv[1][0] == '-') {
 			fprintf(stderr, "r5e: unknown option: %s\n", argv[1]);
@@ -33,26 +31,63 @@ int main(int argc, char** argv) {
 		argv++;
 	}
 
+	if (fn == NULL) {
+		fprintf(stderr, "r5e: no image specified\n");
+		return -1;
+	}
+
 	risc_t *r = risc_new(trace);
 
-	if (fn == NULL) {
-		for (unsigned n = 0; n < sizeof(data); n += 4) {
-			risc_store_word(r, n, data[n/4]);
+	// load image
+	int fd = open(fn, O_RDONLY);
+	if (fd < 0) {
+		fprintf(stderr, "r5e: cannot open: %s\n", fn);
+		return -1;
+	}
+	unsigned n = 0;
+	uint32_t w;
+	while (read(fd, &w, sizeof(w)) == 4) {
+		risc_store_word(r, n, w);
+		n += 4;
+	}
+
+	// setup entry environment
+	uint32_t sp = 0x100000;
+
+	// exit shim
+	sp -= 16;
+	risc_store_word(r, sp+0, 0x51000000); // mov r1, 0xffff0000
+	risc_store_word(r, sp+4, 0xa0100100); // stw r0, [r1, 256]
+	risc_store_word(r, sp+8, 0xe7ffffff); // b .
+	// point LR at shim
+	risc_set_register(r, 15, sp);
+
+	// r0/r1 is an [][]byte of commandline args
+	if (args) {
+		sp -= args * 8;
+		uint32_t p = sp;
+		risc_set_register(r, 0, p);
+		risc_set_register(r, 1, args);
+		while (args > 0) {
+			fprintf(stderr, "E %s\n", argv[0]);
+			uint32_t n = strlen(argv[0]);
+			sp -= (n + 3) & (~3);
+			for (uint32_t i = 0; i < n; i++) {
+				risc_store_byte(r, sp + i, argv[0][i]);
+			}
+			risc_store_word(r, p+0, sp);
+			risc_store_word(r, p+4, n);
+			p += 8;
+			args--;
+			argv++;
 		}
 	} else {
-		int fd = open(fn, O_RDONLY);
-		if (fd < 0) {
-			fprintf(stderr, "r5e: cannot open: %s\n", fn);
-			return -1;
-		}
-		unsigned n = 0;
-		uint32_t w;
-		while (read(fd, &w, sizeof(w)) == 4) {
-			risc_store_word(r, n, w);
-			n += 4;
-		}
-		//fprintf(stderr,"r5e: loaded %u bytes from '%s'\n", n, fn);
+		risc_set_register(r, 0, 0);
+		risc_set_register(r, 1, 0);
 	}
+
+	// set SP
+	risc_set_register(r, 14, sp);
 
 	risc_run(r, 100000);
 	return 0;
