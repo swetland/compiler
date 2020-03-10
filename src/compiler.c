@@ -1739,8 +1739,6 @@ void gen_start() {
 }
 
 void gen_end() {
-	ctx.code[0] |= (ctx.pc - 4) >> 2; // patch branch at 0
-
 	String str = mkstring("start", 5);
 	Object obj = find(str);
 	while (obj != nil) {
@@ -1750,11 +1748,8 @@ void gen_end() {
 		if (obj->first != nil) {
 			error("'start' must have no parameters\n");
 		}
-		emit_mov(14, 0x100000);                      // MOV SP, RAMTOP
-		emit_bi(AL|L, -((ctx.pc + 4 - obj->value) >> 2));  // BL start
-		emit_mov(1, 0xFFFF0000);                     // MOV R1, IOBASE
-		emit_mem(STW, 0, 1, 0x100);                  // SW R0, [R1, 0x100]
-		emit_bi(AL, -1);                             // B .
+		// patch branch at addr 0
+		ctx.code[0] |= (obj->value - 4) >> 2;
 		return;
 	}
 	error("no 'start' function\n");
