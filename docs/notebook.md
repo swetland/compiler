@@ -2,6 +2,22 @@
 
 A place to jot down ideas and/or commentary about the work in progress.
 
+### 2020 Mar 09 - Simplifying the Code
+
+Up til now I had been passing around a "compiler context" pointer, so
+almost every method looked like `parse_xyz(Ctx ctx, ...)` with a sort of
+explicit this pointer as the first argument.
+
+This caused a lot of clutter, and it will not help performance in any
+useful way once it's self-hosting (since globals are loaded relative
+to a global pointer register, whereas pointers first have to be grabbed
+relative to sp and then further dereferenced).
+
+It is useful from a namespace clutter standpoint to keep the struct
+rather than 20-some stray globals.
+
+See: [commit 1086c2aa1](https://github.com/swetland/compiler/commit/1086c2aa1133ed44b462b9a360f180ef9f0a851e)
+
 ### 2020 Mar 09 - Path to Self-Hosting
 
 As a big goal of the project is for the compiler to be self-hosted, able
