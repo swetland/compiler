@@ -382,9 +382,15 @@ void set_item(Item itm, u32 kind, Type type, u32 r, u32 a, u32 b) {
 }
 
 void add_type(Type type, String name) {
-	type->obj = make_object(oType, name, type, nil, 0, 0);
-	type->obj->next = ctx.typetab;
-	ctx.typetab = type->obj;
+	Object obj = make_object(oType, name, type, nil, 0, 0);
+	if (type->obj == nil) {
+		// only set the the type's object if it is
+		// not already set (otherwise aliases will
+		// clobber the canonical type names -- yuck!)
+		type->obj = obj;
+	}
+	obj->next = ctx.typetab;
+	ctx.typetab = obj;
 }
 
 Type setup_type(const char* text, u32 tlen, u32 kind, u32 size) {
@@ -1073,7 +1079,7 @@ Type parse_func_type() {
 Type parse_type(bool fwd_ref_ok) {
 	if (ctx.tok == tSTAR) { // pointer-to
 		next();
-		return make_type(tPointer, parse_type(true), nil, nil, 0, 0);
+		return make_type(tPointer, parse_type(true), nil, nil, 0, 4);
 	} else if (ctx.tok == tOBRACK) { // array-of
 		next();
 		return parse_array_type();
@@ -1089,7 +1095,7 @@ Type parse_type(bool fwd_ref_ok) {
 		Type type = find_type(name);
 		if (type == nil) {
 			if (fwd_ref_ok) {
-				type = make_type(tUndefined, nil, nil, nil, 0, 4);
+				type = make_type(tUndefined, nil, nil, nil, 0, 0);
 				add_type(type, name);
 			} else {
 				error("undefined type '%s' not usable here", name->text);
@@ -1212,8 +1218,7 @@ void parse_local_var() {
 	lvar->next = ctx.scope->first;
 	ctx.scope->first = lvar;
 
-	// TODO: size from type
-	ctx.alloc_stack = ctx.alloc_stack + 4;
+	ctx.alloc_stack = ctx.alloc_stack + type->size;
 	if (ctx.local_stack < ctx.alloc_stack) {
 		ctx.local_stack = ctx.alloc_stack;
 	}
@@ -2056,7 +2061,7 @@ void dump_type(Type type, bool use_short_name) {
 		while (field != nil) {
 			printf("    %s ", field->name->text);
 			dump_type(field->type, true);
-			printf(",\n");
+			printf(", // off=%u, sz=%u\n", field->value, field->type->size);
 			field = field->next;
 		}
 		printf("}");
@@ -2073,7 +2078,7 @@ void dump_context() {
 	while (obj != nil) {
 		printf("type %s ", obj->name->text);
 		dump_type(obj->type, false);
-		printf(";\n");
+		printf("; // sz=%u\n", obj->type->size);
 		obj = obj->next;
 	}
 }
