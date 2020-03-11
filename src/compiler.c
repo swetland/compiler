@@ -48,7 +48,9 @@ typedef enum {
 	tBREAK, tCONTINUE, tRETURN,
 	tFOR, tSWITCH, tCASE,
 	tTRUE, tFALSE, tNIL,
-	tNAME, tNUMBER, tSTRING,
+	tIDN, tNUM, tSTR,
+	// used internal to the lexer but never returned
+	tSPC, tINV, tDQT, tSQT, tMSC,
 } token_t;
 
 char *tnames[] = {
@@ -66,6 +68,41 @@ char *tnames[] = {
 	"for", "switch", "case",
 	"true", "false", "nil",
 	"<ID>", "<NUM>", "<STR>",
+};
+
+u8 lextab[256] = {
+	tINV, tINV, tINV, tINV, tINV, tINV, tINV, tINV,
+	tINV, tSPC, tEOL, tSPC, tINV, tSPC, tINV, tINV,
+	tINV, tINV, tINV, tINV, tINV, tINV, tINV, tINV,
+	tINV, tINV, tINV, tINV, tINV, tINV, tINV, tINV,
+	tSPC, tBANG, tDQT, tMSC, tMSC, tPERCENT, tAMP, tSQT,
+	tOPAREN, tCPAREN, tSTAR, tPLUS, tCOMMA, tMINUS, tDOT, tSLASH,
+	tNUM, tNUM, tNUM, tNUM, tNUM, tNUM, tNUM, tNUM,
+	tNUM, tNUM, tCOLON, tSEMI, tLT, tEQ, tGT, tMSC,
+	tMSC, tIDN, tIDN, tIDN, tIDN, tIDN, tIDN, tIDN,
+	tIDN, tIDN, tIDN, tIDN, tIDN, tIDN, tIDN, tIDN,
+	tIDN, tIDN, tIDN, tIDN, tIDN, tIDN, tIDN, tIDN,
+	tIDN, tIDN, tIDN, tOBRACK, tMSC, tCBRACK, tCARET, tIDN,
+	tMSC, tIDN, tIDN, tIDN, tIDN, tIDN, tIDN, tIDN,
+	tIDN, tIDN, tIDN, tIDN, tIDN, tIDN, tIDN, tIDN,
+	tIDN, tIDN, tIDN, tIDN, tIDN, tIDN, tIDN, tIDN,
+	tIDN, tIDN, tIDN, tOBRACE, tPIPE, tCBRACE, tNOT, tINV,
+	tINV, tINV, tINV, tINV, tINV, tINV, tINV, tINV,
+	tINV, tINV, tINV, tINV, tINV, tINV, tINV, tINV,
+	tINV, tINV, tINV, tINV, tINV, tINV, tINV, tINV,
+	tINV, tINV, tINV, tINV, tINV, tINV, tINV, tINV,
+	tINV, tINV, tINV, tINV, tINV, tINV, tINV, tINV,
+	tINV, tINV, tINV, tINV, tINV, tINV, tINV, tINV,
+	tINV, tINV, tINV, tINV, tINV, tINV, tINV, tINV,
+	tINV, tINV, tINV, tINV, tINV, tINV, tINV, tINV,
+	tINV, tINV, tINV, tINV, tINV, tINV, tINV, tINV,
+	tINV, tINV, tINV, tINV, tINV, tINV, tINV, tINV,
+	tINV, tINV, tINV, tINV, tINV, tINV, tINV, tINV,
+	tINV, tINV, tINV, tINV, tINV, tINV, tINV, tINV,
+	tINV, tINV, tINV, tINV, tINV, tINV, tINV, tINV,
+	tINV, tINV, tINV, tINV, tINV, tINV, tINV, tINV,
+	tINV, tINV, tINV, tINV, tINV, tINV, tINV, tINV,
+	tINV, tINV, tINV, tINV, tINV, tINV, tINV, tINV,
 };
 
 // encodings for ops in Items
@@ -219,7 +256,7 @@ struct CtxRec {
 
 	token_t tok;           // most recent token
 	u32 num;
-	char tmp[256];         // used for tNAME, tTYPE, tNUMBER, tSTRING;
+	char tmp[256];         // used for tIDN, tTYPE, tNUM, tSTR;
 
 	String strtab;         // TODO: hashtable
 	Object typetab;        // TODO: hashtable
@@ -540,7 +577,7 @@ token_t next_string(const char* s) {
 done:
 	ctx.tmp[len] = 0;
 	ctx.sptr = s;
-	return tSTRING;
+	return tSTR;
 }
 
 token_t next_num(u32 n, const char* str, size_t len) {
@@ -549,7 +586,7 @@ token_t next_num(u32 n, const char* str, size_t len) {
 	ctx.tmp[len] = 0;
 	ctx.num = n;
 	ctx.sptr += len;
-	return ctx.tok = tNUMBER;
+	return ctx.tok = tNUM;
 }
 
 int streq(const char* s1, u32 l1, const char* s2, u32 l2) {
@@ -592,7 +629,7 @@ token_t next_word(const char* str, size_t len) {
 		if (streq(str, len, "continue", 8)) return ctx.tok = tCONTINUE;
 		break;
 	}
-	return ctx.tok = tNAME;
+	return ctx.tok = tIDN;
 }
 
 #define TOKEN(t) { ctx.sptr++; return ctx.tok = t; }
@@ -739,11 +776,11 @@ void printstr(const char* s) {
 
 void print() {
 	switch (ctx.tok) {
-	case tNUMBER: printf("#%u ", ctx.num); break;
-	case tNAME:   printf("@%s ", ctx.tmp); break;
-	case tEOL:    printf("\n"); break;
-	case tSTRING: printstr(ctx.tmp); break;
-	default:      printf("%s ", tnames[ctx.tok & 0x7F]); break;
+	case tNUM: printf("#%u ", ctx.num); break;
+	case tIDN: printf("@%s ", ctx.tmp); break;
+	case tEOL: printf("\n"); break;
+	case tSTR: printstr(ctx.tmp); break;
+	default:   printf("%s ", tnames[ctx.tok & 0x7F]); break;
 	}
 }
 
@@ -853,9 +890,9 @@ u32 invert_relop(u32 op) {
 void parse_expr(Item x);
 
 void parse_operand(Item x) {
-	if (ctx.tok == tNUMBER) {
+	if (ctx.tok == tNUM) {
 		set_item(x, iConst, ctx.type_int32, 0, ctx.num, 0);
-	} else if (ctx.tok == tSTRING) {
+	} else if (ctx.tok == tSTR) {
 		error("<TODO> string const");
 	} else if (ctx.tok == tTRUE) {
 		set_item(x, iConst, ctx.type_bool, 0, 1, 0);
@@ -868,7 +905,7 @@ void parse_operand(Item x) {
 		parse_expr(x);
 		require(tCPAREN);
 		return;
-	} else if (ctx.tok == tNAME) {
+	} else if (ctx.tok == tIDN) {
 		String str = make_string(ctx.tmp, strlen(ctx.tmp));
 		Object obj = find(str);
 		if (obj == nil) {
@@ -993,7 +1030,7 @@ void parse_expr(Item x) {
 }
 
 String parse_name(const char* what) {
-	if (ctx.tok != tNAME) {
+	if (ctx.tok != tIDN) {
 		error("expected %s, found %s", what, tnames[ctx.tok & 0x7F]);
 	}
 	String str = make_string(ctx.tmp, strlen(ctx.tmp));
@@ -1089,7 +1126,7 @@ Type parse_type(bool fwd_ref_ok) {
 	} else if (ctx.tok == tSTRUCT) {
 		next();
 		return parse_struct_type();
-	} else if (ctx.tok == tNAME) {
+	} else if (ctx.tok == tIDN) {
 		String name = make_string(ctx.tmp, strlen(ctx.tmp));
 		next();
 		Type type = find_type(name);
