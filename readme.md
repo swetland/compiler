@@ -14,10 +14,16 @@ source size, and binary size) borrowing syntax from some of my favorite
 and suitable for small, embedded, self-hosted systems.
 
 ### [Why write a compiler?](docs/why-write-a-compiler.md)
+Do you have to have a reason?
 
 ### [Resources and Inspiration](docs/resources-and-inspiration.md)
+Documents and things that inspired this adventure.
 
 ### [Notebook](docs/notebook.md) 
+A place for commentary, ideas, and random jottings.
+
+### [Todo List](docs/todo.md)
+Little boxes to be ticked when tasks are completed.
 
 ### Status
 
