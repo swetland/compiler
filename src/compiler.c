@@ -840,7 +840,7 @@ void parse_operand(Item x) {
 	if (ctx.tok == tNUMBER) {
 		set_item(x, iConst, ctx.type_int32, 0, ctx.num, 0);
 	} else if (ctx.tok == tSTRING) {
-		error("unsupported string const");
+		error("<TODO> string const");
 	} else if (ctx.tok == tTRUE) {
 		set_item(x, iConst, ctx.type_bool, 0, 1, 0);
 	} else if (ctx.tok == tFALSE) {
@@ -893,9 +893,9 @@ void parse_primary_expr(Item x) {
 			require(tCPAREN);
 			gen_call(x);
 		} else if (ctx.tok == tDOT) {
-			error("unsupported field deref");
+			error("<TODO> field deref");
 		} else if (ctx.tok == tOBRACK) {
-			error("unsupported array deref");
+			error("<TODO> array deref");
 		} else {
 			break;
 		}
@@ -917,7 +917,7 @@ void parse_unary_expr(Item x) {
 		}
 	} else if (ctx.tok == tAMP) {
 		next();
-		error("deref unsupported");
+		error("<TODO> get pointer");
 	} else {
 		parse_primary_expr(x);
 	}
@@ -962,7 +962,7 @@ void parse_and_expr(Item x) {
 		next();
 		ItemRec y;
 		parse_rel_expr(&y);
-		error("unsupported and op");
+		error("<TODO> and op");
 	}
 }
 
@@ -972,7 +972,7 @@ void parse_expr(Item x) {
 		next();
 		ItemRec y;
 		parse_and_expr(&y);
-		error("unsupported or op");
+		error("<TODO> or op");
 	}
 }
 
@@ -1056,7 +1056,7 @@ Type parse_array_type() {
 }
 
 Type parse_func_type() {
-	error("func type unsupported");
+	error("<TODO> func type");
 	return nil;
 }
 
@@ -1391,7 +1391,7 @@ void parse_type_def() {
 }
 
 void parse_global_var() {
-	error("unsupported");
+	error("<TODO> global var");
 }
 
 void parse_program() {
