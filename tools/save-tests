@@ -1,0 +1,5 @@
+#!/bin/sh
+
+rm -rf out/save
+mkdir -p out/save
+cp -vr out/test/* out/save/

@@ -1250,7 +1250,7 @@ Object parse_param(String fname, u32 n, Object first, Object last) {
 	}
 	String pname = parse_name("parameter name");
 	Type ptype = parse_type(false);
-	Object param = make_param(pname, ptype, 0, n);
+	Object param = make_param(pname, ptype, 0, 4 + n * 4);
 
 	Object obj = first;
 	while (obj != nil) {
@@ -1582,7 +1582,7 @@ void gen_load_reg(Item x, u32 r) {
 	} else if (x->kind == iConst) {
 		emit_mov(r, x->a);
 	} else if (x->kind == iParam) {
-		emit_mem(LDW, r, SP, 4 + x->a * 4);
+		emit_mem(LDW, r, SP, x->a);
 	} else {
 		error("gen_load failed");
 	}
@@ -1607,7 +1607,7 @@ void gen_load(Item x) {
 void gen_store(Item val, Item var) {
 	gen_load(val);
 	if (var->kind == iParam) {
-		emit_mem(STW, val->r, SP, 4 + var->a * 4);
+		emit_mem(STW, val->r, SP, var->a);
 		put_reg(val->r);
 	} else {
 		error("gen_store: invalid target");

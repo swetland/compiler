@@ -1,0 +1,7 @@
+#!/bin/sh
+
+for TEST in out/test/*.lst; do
+	SAVE=out/save/${TEST#"out/test/"}
+	echo CHECK $SAVE $TEST
+	diff $SAVE $TEST
+done
