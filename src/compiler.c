@@ -53,6 +53,8 @@ typedef enum {
 	tTRUE = 0x030, tFALSE = 0x031, tNIL = 0x032,
 	// Idenitfiers, Numbers, Strings
 	tNAME = 0x033, tNUMBER = 0x034, tSTRING = 0x035,
+	// To be resorted later...
+	tTYPE = 0x036,
 } token_t;
 
 char *tnames[] = {
@@ -72,6 +74,7 @@ char *tnames[] = {
 	"break", "continue", "switch", "case",
 	"true", "false", "nil",
 	"<NAME>", "<NUMBER>", "<STRING>",
+	"type",
 };
 
 // encodings for ops in Items
@@ -127,12 +130,12 @@ enum {
 
 struct ObjectRec {
 	u32 kind;
+	String name;
+	Type type;
+	Object first; // list of...
+	Object next;  // link in list
 	u32 flags;
 	u32 value;
-	Object next;  // link in list
-	Object first; // list of...
-	Type type;
-	String name;
 	Fixup fixups; // forward func refs
 };
 
@@ -158,9 +161,9 @@ enum {           // value
 
 struct TypeRec {
 	u32 kind;
+	Type base;    // Pointer-to, Func-return, or Array-elem
 	Object obj;   // if we're non-anonymous
 	Object first; // list of Params or Fields
-	Type base;    // Pointer-to, Func-return, or Array-elem
 	u32 len;      // of Array, num of Params
 	u32 size;     // of Type in Memory
 };
@@ -172,11 +175,17 @@ enum {
 	tBool,
 	tInt32,
 	tNil,
-	tString,
 	tPointer,
 	tArray,
-	rRecord,
+	tSlice,
+	tRecord,
 	tFunc,
+	tUndefined,
+};
+
+const char* type_id_tab[] = {
+	"void", "byte", "bool", "int32", "nil", "*", "[]", "[]",
+	"struct", "func", "undef",
 };
 
 // ------------------------------------------------------------------
@@ -291,7 +300,7 @@ void fixup_branches_fwd(Fixup list);
 // address where we will emit the next instruction
 void fixup_branch_fwd(u32 addr);
 
-String mkstring(const char* text, u32 len) {
+String make_string(const char* text, u32 len) {
 	String str = ctx.strtab;
 	while (str != nil) {
 		if ((str->len == len) && (memcmp(text, str->text, len) == 0)) {
@@ -310,29 +319,64 @@ String mkstring(const char* text, u32 len) {
 	return str;
 }
 
-Type make_type(const char* text, u32 len, u32 kind, u32 size) {
-	String str = mkstring(text, len);
-	Type type = malloc(sizeof(TypeRec));
+Object make_object(u32 kind, String name, Type type,
+	Object first, u32 flags, u32 value) {
 	Object obj = malloc(sizeof(ObjectRec));
-
-	type->kind = kind;
-	type->obj = obj;
-	type->first = nil;
-	type->base = nil;
-	type->len = 0;
-	type->size = size;
-
-	obj->kind = oType;
-	obj->flags = 0;
-	obj->value = 0;
-	obj->next = nil;
-	obj->first = nil;
+	obj->kind = kind;
+	obj->name = name;
 	obj->type = type;
-	obj->name = str;
+	obj->first = first;
+	obj->next = nil;
+	obj->flags = flags;
+	obj->value = value;
+	obj->fixups = nil;
+	return obj;
+}
 
-	obj->next = ctx.typetab;
-	ctx.typetab = obj;
+Type make_type(u32 kind, Type base, Object obj,
+	Object first, u32 len, u32 size) {
+	Type type = malloc(sizeof(TypeRec));
+	type->kind = kind;
+	type->base = base;
+	type->obj = obj;
+	type->first = first;
+	type->len = len;
+	type->size = size;
+	return type;
+}
 
+Object make_param(String name, Type type, u32 flags, u32 value) {
+	Object param = malloc(sizeof(ObjectRec));
+	param->kind = oParam;
+	param->name = name;
+	param->type = type;
+	param->first = nil;
+	param->next = nil;
+	param->flags = flags;
+	param->value = value;
+	param->fixups = nil;
+	return param;
+}
+
+void set_item(Item itm, u32 kind, Type type, u32 r, u32 a, u32 b) {
+	itm->kind = kind;
+	itm->flags = 0;
+	itm->type = type;
+	itm->r = r;
+	itm->a = a;
+	itm->b = b;
+}
+
+void add_type(Type type, String name) {
+	type->obj = make_object(oType, name, type, nil, 0, 0);
+	type->obj->next = ctx.typetab;
+	ctx.typetab = type->obj;
+}
+
+Type setup_type(const char* text, u32 tlen, u32 kind, u32 size) {
+	String name = make_string(text, tlen);
+	Type type = make_type(kind, nil, nil, nil, 0, size);
+	add_type(type, name);
 	return type;
 }
 
@@ -346,12 +390,13 @@ void init_ctx() {
 	memset(&ctx, 0, sizeof(ctx));
 
 	// install built-in basic types
-	ctx.type_void    = make_type("void", 4, tVoid, 0);
-	ctx.type_byte    = make_type("byte", 4, tByte, 1);
-	ctx.type_bool    = make_type("bool", 4, tBool, 1);
-	ctx.type_int32   = make_type("i32",  3, tInt32, 4);
-	ctx.type_nil     = make_type("nil",  3, tNil, 4);
-	ctx.type_string  = make_type("str",  3, tString, 8);
+	ctx.type_void    = setup_type("void", 4, tVoid, 0);
+	ctx.type_byte    = setup_type("byte", 4, tByte, 1);
+	ctx.type_bool    = setup_type("bool", 4, tBool, 1);
+	ctx.type_int32   = setup_type("i32",  3, tInt32, 4);
+	ctx.type_nil     = setup_type("nil",  3, tNil, 4);
+	ctx.type_string  = setup_type("str",  3, tSlice, 8);
+	ctx.type_string->base = ctx.type_byte;
 
 	ctx.scope = &(ctx.global);
 	ctx.line = "";
@@ -511,6 +556,7 @@ token_t next_word(const char* str, size_t len) {
 		if (streq(str, len, "func", 4)) return ctx.tok = tFUNC;
 		if (streq(str, len, "else", 4)) return ctx.tok = tELSE;
 		if (streq(str, len, "true", 4)) return ctx.tok = tTRUE;
+		if (streq(str, len, "type", 4)) return ctx.tok = tTYPE;
 		break;
 	case 5:
 		if (streq(str, len, "break", 5)) return ctx.tok = tBREAK;
@@ -771,15 +817,6 @@ void add_object_fixup(Object obj) {
 	obj->fixups = fixup;
 }
 
-void setitem(Item itm, u32 kind, Type type, u32 r, u32 a, u32 b) {
-	itm->kind = kind;
-	itm->flags = 0;
-	itm->type = type;
-	itm->r = r;
-	itm->a = a;
-	itm->b = b;
-}
-
 u32 invert_relop(u32 op) {
 	if (op > 5) { abort(); }
 	return invert_relop_tab[op];
@@ -790,30 +827,30 @@ void parse_expr(Item x);
 
 void parse_operand(Item x) {
 	if (ctx.tok == tNUMBER) {
-		setitem(x, iConst, ctx.type_int32, 0, ctx.num, 0);
+		set_item(x, iConst, ctx.type_int32, 0, ctx.num, 0);
 	} else if (ctx.tok == tSTRING) {
 		error("unsupported string const");
 	} else if (ctx.tok == tTRUE) {
-		setitem(x, iConst, ctx.type_bool, 0, 1, 0);
+		set_item(x, iConst, ctx.type_bool, 0, 1, 0);
 	} else if (ctx.tok == tFALSE) {
-		setitem(x, iConst, ctx.type_bool, 0, 0, 0);
+		set_item(x, iConst, ctx.type_bool, 0, 0, 0);
 	} else if (ctx.tok == tNIL) {
-		setitem(x, iConst, ctx.type_nil, 0, 0, 0);
+		set_item(x, iConst, ctx.type_nil, 0, 0, 0);
 	} else if (ctx.tok == tOPAREN) {
 		next();
 		parse_expr(x);
 		require(tCPAREN);
 		return;
 	} else if (ctx.tok == tNAME) {
-		String str = mkstring(ctx.tmp, strlen(ctx.tmp));
+		String str = make_string(ctx.tmp, strlen(ctx.tmp));
 		Object obj = find(str);
 		if (obj == nil) {
 			error("unknown identifier '%s'", str->text);
 		}
 		if (obj->kind == oParam) {
-			setitem(x, iParam, obj->type, 0, obj->value, 0);
+			set_item(x, iParam, obj->type, 0, obj->value, 0);
 		} else if (obj->kind == oFunc) {
-			setitem(x, iFunc, obj->type, 0, 0, 0);
+			set_item(x, iFunc, obj->type, 0, 0, 0);
 		} else {
 			error("unsupported identifier");
 		}
@@ -932,22 +969,116 @@ String parse_name(const char* what) {
 	if (ctx.tok != tNAME) {
 		error("expected %s, found %s", what, tnames[ctx.tok & 0x7F]);
 	}
-	String str = mkstring(ctx.tmp, strlen(ctx.tmp));
+	String str = make_string(ctx.tmp, strlen(ctx.tmp));
 	next();
 	return str;
 }
 
-Type parse_type() {
-	String tname = parse_name("type name");
+Type find_type(String name) {
 	Object obj = ctx.typetab;
 	while (obj != nil) {
-		if (obj->name == tname) {
+		if (obj->name == name) {
 			return obj->type;
 		}
 		obj = obj->next;
 	}
-	error("unknown type name '%s'", tname->text);
 	return nil;
+}
+
+// fwd_ref_ok indicates that an undefined typename
+// may be treated as a forward reference.  This is
+// only used for pointers (size their size does not
+// depend on their target).
+Type parse_type(bool fwd_ref_ok);
+
+Type parse_struct_type() {
+	Type rectype = make_type(tRecord, nil, nil, nil, 0, 0);
+	Object last = nil;
+	require(tOBRACE);
+	while (true) {
+		if (ctx.tok == tCBRACE) {
+			next();
+			break;
+		}
+		String name = parse_name("field name");
+		Type type = parse_type(false);
+		Object field = make_object(oField, name, type, nil, 0, rectype->size);
+
+		// TODO sub-word packing
+		rectype->size += (type->size + 3) & (~3);
+		rectype->len++;
+
+		// add field to record
+		if (last == nil) {
+			rectype->first = field;
+		} else {
+			last->next = field;
+		}
+		last = field;
+
+		if (ctx.tok != tCBRACE) {
+			require(tCOMMA);
+		}
+	}
+	return rectype;
+}
+
+Type parse_array_type() {
+	if (ctx.tok == tCBRACK) {
+		next();
+		return make_type(tSlice, parse_type(false), nil, nil, 0, 8);
+	} else {
+		ItemRec x;
+		parse_expr(&x);
+		require(tCBRACK);
+		if ((x.kind != iConst) || (x.type != ctx.type_int32)) {
+			error("array size must be integer constant");
+		}
+		//XXX check for >0
+		Type base = parse_type(false);
+		u32 sz = x.a * base->size;
+		if (sz < x.a) {
+			error("array size overflow");
+		}
+		return make_type(tArray, base, nil, nil, x.a, sz);
+	}
+}
+
+Type parse_func_type() {
+	error("func type unsupported");
+	return nil;
+}
+
+Type parse_type(bool fwd_ref_ok) {
+	if (ctx.tok == tSTAR) { // pointer-to
+		next();
+		return make_type(tPointer, parse_type(true), nil, nil, 0, 0);
+	} else if (ctx.tok == tOBRACK) { // array-of
+		next();
+		return parse_array_type();
+	} else if (ctx.tok == tFUNC) {
+		next();
+		return parse_func_type();
+	} else if (ctx.tok == tSTRUCT) {
+		next();
+		return parse_struct_type();
+	} else if (ctx.tok == tNAME) {
+		String name = make_string(ctx.tmp, strlen(ctx.tmp));
+		next();
+		Type type = find_type(name);
+		if (type == nil) {
+			if (fwd_ref_ok) {
+				type = make_type(tUndefined, nil, nil, nil, 0, 4);
+				add_type(type, name);
+			} else {
+				error("undefined type '%s' not usable here", name->text);
+			}
+		}
+		return type;
+	} else {
+		expected("type");
+		return nil;
+	}
 }
 
 void parse_block();
@@ -1081,7 +1212,7 @@ void parse_block() {
 				gen_store(&y, &x);
 			} else if ((ctx.tok == tINC) || (ctx.tok == tDEC)) {
 				ItemRec y;
-				setitem(&y, iConst, ctx.type_int32, 0, 1, 0);
+				set_item(&y, iConst, ctx.type_int32, 0, 1, 0);
 				next();
 			}
 			require(tSEMI);
@@ -1100,20 +1231,13 @@ void parse_function_body(Object fn) {
 	gen_epilogue(fn);
 }
 
-
 Object parse_param(String fname, u32 n, Object first, Object last) {
 	if (n == FNMAXARGS) {
 		error("too many parameters (%d) for '%s'", FNMAXARGS, fname->text);
 	}
-	Object param = malloc(sizeof(ObjectRec));
-	param->kind = oParam;
-	param->flags = 0;
-	param->value = n;
-	param->next = nil;
-	param->first = nil;
-	param->name = parse_name("parameter name");
-	param->type = parse_type();
-	param->fixups = nil;
+	String pname = parse_name("parameter name");
+	Type ptype = parse_type(false);
+	Object param = make_param(pname, ptype, 0, n);
 
 	Object obj = first;
 	while (obj != nil) {
@@ -1130,53 +1254,21 @@ Object parse_param(String fname, u32 n, Object first, Object last) {
 }
 
 void make_builtin(const char* name, u32 id, Type p0, Type p1, Type rtn) {
-	Type type = malloc(sizeof(TypeRec));
-	Object obj = malloc(sizeof(ObjectRec));
-
-	type->kind = tFunc;
-	type->obj = obj;
-	type->first = nil;
-	type->base = rtn;
-	type->len = 0;
-	type->size = 0;
-
-	obj->kind = oFunc;
-	obj->flags = ofBuiltin;
-	obj->value = id;
-	obj->next = nil;
-	obj->first = nil;
-	obj->type = type;
-	obj->name = mkstring(name, strlen(name));
-	obj->fixups = nil;
+	String fname = make_string(name, strlen(name));
+	Type type = make_type(tFunc, rtn, nil, nil, 0, 0);
+	type->obj = make_object(oFunc, fname, type, nil, ofBuiltin, id);
 
 	if (p0 != nil) {
-		Object param = malloc(sizeof(ObjectRec));
-		obj->first = param;
+		Object param = make_param(make_string("a", 1), p0, 0, 0);
+		type->obj->first = param;
 		type->first = param;
-		param->kind = oParam;
-		param->flags = 0;
-		param->value = 0;
-		param->next = nil;
-		param->first = nil;
-		param->name = mkstring("a", 1);
-		param->type = p0;
-		param->fixups = nil;
 		type->len = 1;
 		if (p1 != nil) {
-			param->next = malloc(sizeof(ObjectRec));
-			param = param->next;
-			param->kind = oParam;
-			param->flags = 0;
-			param->value = 1;
-			param->next = nil;
-			param->first = nil;
-			param->name = mkstring("b", 1);
-			param->type = p1;
-			param->fixups = nil;
+			param->next = make_param(make_string("b", 1), p1, 0, 1);
 			type->len = 2;
 		}
 	}
-	make_global(obj);
+	make_global(type->obj);
 }
 
 void parse_function() {
@@ -1184,7 +1276,7 @@ void parse_function() {
 	Object last = nil;
 	u32 n = 0;
 	String fname = parse_name("funcion name");
-	Type ftype = ctx.type_void;
+	Type rettype = ctx.type_void;
 
 	require(tOPAREN);
 
@@ -1202,7 +1294,7 @@ void parse_function() {
 	require(tCPAREN);
 
 	if ((ctx.tok != tSEMI) && (ctx.tok != tOBRACE)) {
-		ftype = parse_type();
+		rettype = parse_type(false);
 	}
 
 	int isdef = 0;
@@ -1228,7 +1320,7 @@ void parse_function() {
 		if (isdef && (obj->flags & ofDefined)) {
 			error("redefined function '%s'", fname->text);
 		}
-		if (ftype != obj->type->base) {
+		if (rettype != obj->type->base) {
 			error("func '%s' return type differs from decl", fname->text);
 		}
 		if (obj->type->len != n) {
@@ -1246,25 +1338,9 @@ void parse_function() {
 		}
 	} else {
 		// if there was no existing record of this function, create one now
-		Type type = malloc(sizeof(TypeRec));
-		obj = malloc(sizeof(ObjectRec));
-
-		type->kind = tFunc;
+		Type type = make_type(tFunc, rettype, nil, first, n, 0);
+		obj = make_object(oFunc, fname, type, first, 0, 0);
 		type->obj = obj;
-		type->first = first;
-		type->base = ftype;
-		type->len = n;
-		type->size = 0;
-
-		obj->kind = oFunc;
-		obj->flags = 0;
-		obj->value = 0;
-		obj->next = nil;
-		obj->first = first;
-		obj->type = type;
-		obj->name = fname;
-		obj->fixups = nil;
-
 		make_global(obj);
 	}
 
@@ -1280,6 +1356,27 @@ void parse_function() {
 	}
 }
 
+void parse_type_def() {
+	String name = parse_name("type name");
+	Type type = parse_type(false);
+	Type prev = find_type(name);
+	if (prev == nil) {
+		add_type(type, name);
+	} else {
+		if (prev->kind != tUndefined) {
+			error("cannot redefine type '%s'\n", name->text);
+		}
+		prev->kind = type->kind;
+		prev->base = type->base;
+		prev->first = type->first;
+		prev->len = type->len;
+		prev->size = type->size;
+		prev->obj->type = type;
+		// XXX discard type
+	}
+	require(tSEMI);
+}
+
 void parse_global_var() {
 	error("unsupported");
 }
@@ -1291,6 +1388,10 @@ void parse_program() {
 		case tFUNC:
 			next();
 			parse_function();
+			break;
+		case tTYPE:
+			next();
+			parse_type_def();
 			break;
 		case tVAR:
 			next();
@@ -1305,6 +1406,7 @@ void parse_program() {
 }
 
 // ================================================================
+
 u32 get_reg_tmp() {
 	u32 n = 8;
 	while (n < 12) {
@@ -1739,7 +1841,7 @@ void gen_start() {
 }
 
 void gen_end() {
-	String str = mkstring("start", 5);
+	String str = make_string("start", 5);
 	Object obj = find(str);
 	while (obj != nil) {
 		if (obj->type->kind != tFunc) {
@@ -1817,10 +1919,48 @@ void gen_listing(const char* listfn, const char* srcfn) {
 
 // ================================================================
 
+
+void dump_type(Type type, bool use_short_name) {
+	if (use_short_name && (type->obj != nil)) {
+		printf("%s", type->obj->name->text);
+	} else if (type->kind == tArray) {
+		printf("[%u]", type->len);
+		dump_type(type->base, true);
+	} else if (type->kind == tRecord) {
+		printf("struct {\n");
+		Object field = type->first;
+		while (field != nil) {
+			printf("    %s ", field->name->text);
+			dump_type(field->type, true);
+			printf(",\n");
+			field = field->next;
+		}
+		printf("}");
+	} else {
+		printf("%s", type_id_tab[type->kind]);
+		if ((type->kind == tPointer) || (type->kind == tSlice)) {
+			dump_type(type->base, true);
+		}
+	}
+}
+
+void dump_context() {
+	Object obj = ctx.typetab;
+	while (obj != nil) {
+		printf("type %s ", obj->name->text);
+		dump_type(obj->type, false);
+		printf(";\n");
+		obj = obj->next;
+	}
+}
+
+// ================================================================
+
 int main(int argc, char **argv) {
 	const char *outname = "out.bin";
 	const char *lstname = nil;
 	const char *srcname = nil;
+	bool dump = false;
 
 	init_ctx();
 	ctx.filename = "<commandline>";
@@ -1840,6 +1980,8 @@ int main(int argc, char **argv) {
 			lstname = argv[2];
 			argc--;
 			argv++;
+		} else if (!strcmp(argv[1], "-p")) {
+			dump = true;
 		} else if (!strcmp(argv[1], "-A")) {
 			ctx.flags |= cfAbortOnError;
 		} else if (argv[1][0] == '-') {
@@ -1878,6 +2020,9 @@ int main(int argc, char **argv) {
 	gen_write(outname);
 	if (lstname != nil) {
 		gen_listing(lstname, ctx.filename);
+	}
+	if (dump) {
+		dump_context();
 	}
 #endif
 
