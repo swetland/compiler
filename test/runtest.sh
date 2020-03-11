@@ -42,6 +42,7 @@ else
 	else
 		echo "RUNTEST: $src: FAIL: compiler error"
 		echo "FAIL: $src" > "$txt"
+		cat "$msg"
 	fi
 fi
 
