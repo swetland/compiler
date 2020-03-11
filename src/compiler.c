@@ -21,60 +21,51 @@ typedef uint32_t u32;
 typedef int32_t i32;
 typedef uint8_t u8;
 
-// token classes (tok >> 8)
+// token classes (tok & tcMASK)
 enum {
-	tcNONE = 0, tcRELOP = 1, tcADDOP = 2, tcMULOP = 3,
+	tcRELOP = 0x08, tcADDOP = 0x10, tcMULOP = 0x18,
+	tcAEQOP = 0x20, tcMEQOP = 0x28, tcMASK = 0xF8
 };
 
 typedef enum {
-	tEOF = 0x000, tEOL = 0x001,
+	// EndMarks, Braces, Brackets Parens
+	tEOF, tEOL, tOBRACE, tCBRACE, tOBRACK, tCBRACK, tOPAREN, tCPAREN,
 	// RelOps (do not reorder)
-	tEQ = 0x102, tNE = 0x103, tLT = 0x104, tLE = 0x105, tGT = 0x106, tGE = 0x107,
+	tEQ, tNE, tLT, tLE, tGT, tGE, tx0E, tx0F,
 	// AddOps (do not reorder)
-	tPLUS = 0x208, tMINUS = 0x209, tPIPE = 0x20A, tCARET = 0x20B,
+	tPLUS, tMINUS, tPIPE, tCARET, tx14, tx15, tx16, tx17,
 	// MulOps (do not reorder)
-	tSTAR = 0x30C, tSLASH = 0x30D, tPERCENT = 0x30E, tAMP = 0x30F,
-	tANDNOT = 0x310, tLEFT = 0x311, tRIGHT = 0x312,
-	// UnaryOps
-	tNOT = 0x013,
-	// LogicalOps
-        tAND = 0x014, tOR = 0x015, tBANG = 0x016,
-	// Brackets, Braces, Parens
-	tOBRACK = 0x017, tCBRACK = 0x018, tOPAREN = 0x019, tCPAREN = 0x01A,
-	tOBRACE = 0x01B, tCBRACE = 0x01C,
-	// Various Punctuation
-	tSEMI = 0x01D, tCOLON = 0x1E, tDOT = 0x01F, tCOMMA = 0x020,
-	tINC = 0x021, tDEC = 0x022, tASSIGN = 0x023,
+	tSTAR, tSLASH, tPERCENT, tAMP, tANDNOT, tLEFT, tRIGHT, tx1F,
+	// AsnOps (do not reorder)
+	tADDEQ, tSUBEQ, tOREQ, tXOREQ, tx24, tx25, tx26, tx27,
+	tMULEQ, tDIVEQ, tMODEQ, tANDEQ, tANNEQ, tLSEQ, tRSEQ, t2F,
+	// Various, UnaryNot, LogicalOps,
+	tSEMI, tCOLON, tDOT, tCOMMA, tNOT, tAND, tOR, tBANG,
+	tASSIGN, tINC, tDEC,
 	// Keywords
-	tVAR = 0x024, tSTRUCT = 0x025, tFUNC = 0x026, tRETURN = 0x027,
-	tIF = 0x028, tELSE = 0x029, tWHILE = 0x02A, tFOR = 0x02B,
-	tBREAK = 0x02C, tCONTINUE = 0x02D, tSWITCH = 0x02E, tCASE = 0x02F,
-	// Special Constants
-	tTRUE = 0x030, tFALSE = 0x031, tNIL = 0x032,
-	// Idenitfiers, Numbers, Strings
-	tNAME = 0x033, tNUMBER = 0x034, tSTRING = 0x035,
-	// To be resorted later...
-	tTYPE = 0x036,
+	tTYPE, tFUNC, tSTRUCT, tVAR,
+	tIF, tELSE, tWHILE,
+	tBREAK, tCONTINUE, tRETURN,
+	tFOR, tSWITCH, tCASE,
+	tTRUE, tFALSE, tNIL,
+	tNAME, tNUMBER, tSTRING,
 } token_t;
 
 char *tnames[] = {
-	"<EOF>", "<EOL>", 
-	"==", "!=", "<", "<=", ">", ">=",
-	"+", "-", "|", "^",
-	"*", "/", "%", "&",
-	"&~", "<<", ">>",
-	"~",
-	"&&", "||", "!",
-	"[", "]", "(", ")",
-	"{", "}",
-	";", ":", ".", ",",
-	"++", "--", "=",
-	"var", "struct", "func", "return",
-	"if", "else", "while", "for",
-	"break", "continue", "switch", "case",
+	"<EOF>", "<EOL>", "{",  "}",  "[",   "]",   "(",   ")",
+	"==",    "!=",    "<",  "<=", ">",   ">=",  "",    "",
+	"+",     "-",     "|",  "^",  "",    "",    "",    "",
+	"*",     "/",     "%",  "&",  "&~",  "<<",  ">>",  "",
+	"+=",    "-=",    "|=", "^=", "",    "",    "",    "",
+	"*=",    "/=",    "%=", "&=", "&~=", "<<=", ">>=", "",
+	";",     ":",     ".",  ",",  "~",   "&&",  "||",  "!",
+	"=",     "++",    "--",
+	"type", "func", "struct", "var",
+	"if", "else", "while",
+	"break", "continue", "return",
+	"for", "switch", "case",
 	"true", "false", "nil",
-	"<NAME>", "<NUMBER>", "<STRING>",
-	"type",
+	"<ID>", "<NUM>", "<STR>",
 };
 
 // encodings for ops in Items
@@ -379,6 +370,15 @@ void set_item(Item itm, u32 kind, Type type, u32 r, u32 a, u32 b) {
 	itm->r = r;
 	itm->a = a;
 	itm->b = b;
+}
+
+void copy_item(Item src, Item dst) {
+	dst->kind = src->kind;
+	dst->flags = src->flags;
+	dst->type = src->type;
+	dst->r = src->r;
+	dst->a = src->a;
+	dst->b = src->b;
 }
 
 void add_type(Type type, String name) {
@@ -941,7 +941,7 @@ void parse_unary_expr(Item x) {
 
 void parse_mul_expr(Item x) {
 	parse_unary_expr(x);
-	while ((ctx.tok >> 8) == tcMULOP) {
+	while ((ctx.tok & tcMASK) == tcMULOP) {
 		u32 mulop = ctx.tok - tSTAR;
 		next();
 		ItemRec y;
@@ -952,7 +952,7 @@ void parse_mul_expr(Item x) {
 
 void parse_add_expr(Item x) {
 	parse_mul_expr(x);
-	while ((ctx.tok >> 8) == tcADDOP) {
+	while ((ctx.tok & tcMASK) == tcADDOP) {
 		u32 addop = ctx.tok - tPLUS;
 		next();
 		ItemRec y;
@@ -963,7 +963,7 @@ void parse_add_expr(Item x) {
 
 void parse_rel_expr(Item x) {
 	parse_add_expr(x);
-	if ((ctx.tok >> 8) == tcRELOP) {
+	if ((ctx.tok & tcMASK) == tcRELOP) {
 		u32 relop = ctx.tok - tEQ;
 		next();
 		ItemRec y;
@@ -1241,12 +1241,26 @@ void parse_expr_statement() {
 		ItemRec y;
 		parse_expr(&y);
 		gen_store(&y, &x);
+	} else if ((ctx.tok & tcMASK) == tcAEQOP) {
+		u32 op = ctx.tok - tADDEQ;
+		next();
+		ItemRec y, z;
+		parse_expr(&y);
+		copy_item(&x, &z);
+		gen_add_op(op, &x, &y);
+		gen_store(&x, &z);
+	} else if ((ctx.tok & tcMASK) == tcMEQOP) {
+		u32 op = ctx.tok - tMULEQ;
+		next();
+		ItemRec y, z;
+		parse_expr(&y);
+		copy_item(&x, &z);
+		gen_add_op(op, &x, &y);
+		gen_store(&x, &z);
 	} else if ((ctx.tok == tINC) || (ctx.tok == tDEC)) {
 		ItemRec y, z;
 		set_item(&y, iConst, ctx.type_int32, 0, 1, 0);
-		// loading x will transform it, so save a copy for storing after
-		set_item(&z, x.kind, x.type, x.r, x.a, x.b);
-		z.flags = x.flags;
+		copy_item(&x, &z);
 		if (ctx.tok == tINC) {
 			gen_add_op(aADD, &x, &y);
 		} else {
