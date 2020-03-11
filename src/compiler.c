@@ -233,7 +233,10 @@ struct CtxRec {
 	Object typetab;        // TODO: hashtable
 	Scope scope;           // scope stack
 	ScopeRec global;
+
 	Object fn;             // function being compiled if non-nil
+	u32 spill_stack;       // where to spill temp regs (TODO: dynamic)
+	u32 local_stack;       // how much stack we use (adjusted for vars, etc)
 
 	Type type_void;
 	Type type_byte;
@@ -244,6 +247,11 @@ struct CtxRec {
 
 	u32 code[8192];
 	u32 pc;
+
+	// The latest pc that a forward branch has been
+	// fixed up to.  cannot safely move code at or
+	// before this address.
+	u32 last_target_pc;
 
 	u32 regbits;
 
@@ -273,6 +281,9 @@ void gen_unary_op(u32 op, Item x);
 
 // stores val into var, consuming both
 void gen_store(Item val, Item var);
+
+// release any registers or other resources held by this item
+void gen_discard(Item val);
 
 // sets up call param #n, consuming val
 void gen_param(u32 n, Item val);
@@ -1214,6 +1225,8 @@ void parse_block() {
 				ItemRec y;
 				set_item(&y, iConst, ctx.type_int32, 0, 1, 0);
 				next();
+			} else {
+				gen_discard(&x);
 			}
 			require(tSEMI);
 		}
@@ -1407,12 +1420,15 @@ void parse_program() {
 
 // ================================================================
 
+#define tmp_reg_count  4
+#define tmp_reg_first  8
+#define tmp_reg_last  11
+
 u32 get_reg_tmp() {
-	u32 n = 8;
-	while (n < 12) {
+	u32 n = tmp_reg_first;
+	while (n <= tmp_reg_last) {
 		if (!(ctx.regbits & (1 << n))) {
 			ctx.regbits |= (1 << n);
-			//printf("GET REG %u\n", n);
 			return n;
 		}
 		n++;
@@ -1422,8 +1438,7 @@ u32 get_reg_tmp() {
 }
 
 void put_reg(u32 r) {
-	//printf("PUT REG %u\n", r);
-	if (r < 8) {
+	if ((r < tmp_reg_first) || (r > tmp_reg_last)) {
 		// currently we don't strictly track r0..r7
 		// they are used for function calls and returns
 		return;
@@ -1575,6 +1590,12 @@ void gen_load_reg(Item x, u32 r) {
 	x->r = r;
 }
 
+void gen_discard(Item x) {
+	if (x->kind == iReg) {
+		put_reg(x->r);
+	}
+}
+
 // convert an item to value-in-register format
 // if it's not already in that format
 void gen_load(Item x) {
@@ -1652,8 +1673,34 @@ void gen_builtin(u32 id) {
 	}
 }
 
+void gen_save_regs() {
+	u32 n = tmp_reg_first;
+	u32 off = ctx.spill_stack;
+	while (n <= tmp_reg_last) {
+		if (ctx.regbits & (1 << n)) {
+			emit_mem(STW, n, SP, off);
+			off += 4;
+		}
+		n++;
+	}
+}
+
+void gen_restore_regs() {
+	u32 n = tmp_reg_first;
+	u32 off = ctx.spill_stack;
+	while (n <= tmp_reg_last) {
+		if (ctx.regbits & (1 << n)) {
+			emit_mem(LDW, n, SP, off);
+			off += 4;
+		}
+		n++;
+	}
+}
+
 void gen_call(Item x) {
+	gen_save_regs();
 	if (x->type->obj->flags & ofBuiltin) {
+		// OPT: not all builtins will require save/restore regs
 		gen_builtin(x->type->obj->value);
 	} else if (x->type->obj->flags & ofDefined) {
 		u32 fnpc = x->type->obj->value;
@@ -1662,14 +1709,19 @@ void gen_call(Item x) {
 		emit_bi(AL|L, 0);
 		add_object_fixup(x->type->obj);
 	}
+	gen_restore_regs();
+
 	// item becomes the return value
 	x->type = x->type->base;
 	if (x->type == ctx.type_void) {
 		x->kind = iConst;
 	} else {
 		x->kind = iReg;
+		x->r = R0;
+		// OPT if we tracked r0 usage we could
+		// avoid moving from R0 to a tmp reg here
+		gen_load_reg(x, get_reg_tmp());
 	}
-	x->r = R0;
 	x->a = 0;
 	x->b = 0;
 }
@@ -1756,6 +1808,8 @@ void gen_mul_op(u32 op, Item x, Item y) {
 void gen_rel_op(u32 op, Item x, Item y) {
 	gen_load(x);
 	gen_load(y);
+
+	// fuse x and y items into the new Comparison Item x
 	x->kind = iComp;
 	x->a = x->r;
 	x->b = y->r;
@@ -1789,22 +1843,25 @@ void gen_unary_op(u32 op, Item x) {
 // patch branch instruction at addr to 
 // branch to current pc
 void fixup_branch_fwd(u32 addr) {
-#if 0
-	// disabled for now as this gets tripped up
-	// by stuff like test/1030-flow-control.src (if (n==3) ...)
-	if (addr == ctx.pc - 4) {
+	if ((addr == ctx.pc - 4) && (ctx.last_target_pc < ctx.pc)) {
 		// if the branch to be patched is the
 		// instruction just previously emitted, we
 		// can simply erase it
+		//
+		// provided it's safe to do so (no branches are
+		// already arriving here...)
 		ctx.pc -= 4;
 		fprintf(stderr, "DELETED BRANCH @ 0x%x\n", ctx.pc);
-	} else
-#endif
-       	{
+	} else {
 		u32 off = (ctx.pc - addr - 4) >> 2;
 		u32 ins = ctx.code[addr >> 2] & 0xFF000000;
 		ctx.code[addr >> 2] = ins | (off & 0x00FFFFFF);
 	}
+
+	// note that we have forward branches to this pc
+	// (to prevent optimizations from moving code
+	// behind them)
+	ctx.last_target_pc = ctx.pc;
 }
 
 void fixup_branches_fwd(Fixup fixup) {
@@ -1820,17 +1877,32 @@ void gen_prologue(Object fn) {
 	emit_mem(STW, LR, SP, 0);
 
 	Object param = fn->first;
+	u32 off = 4;
 	u32 r = 0;
 	while (param != nil) {
-		emit_mem(STW, r, SP, (r + 1) * 4);
+		emit_mem(STW, r, SP, off);
 		r++;
+		off += 4;
 		param = param->next;
 	}
+	// set aside space to spill temporary regs
+	// OPT: would be nice to only reserve space we need
+	ctx.spill_stack = off;
+	ctx.local_stack = off + 4 * tmp_reg_count;
 }
 
 void gen_epilogue(Object fn) {
+	if (ctx.local_stack > 0xFFFF) {
+		error("using too much stack");
+	}
+
+	// patch prologue
+	u32 ins = ctx.code[fn->value / 4];
+	ctx.code[fn->value / 4] = (ins & 0xFFFF0000) | ctx.local_stack;
+
+	// emit epilogue
 	emit_mem(LDW, LR, SP, 0);
-	emit_opi(ADD, SP, SP, 4 + fn->type->len * 4);
+	emit_opi(ADD, SP, SP, ctx.local_stack);
 	emit_br(AL, LR);
 }
 

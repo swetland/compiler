@@ -1,0 +1,20 @@
+
+func fib(n i32) i32 {
+	if (n < 2) {
+		return n;
+	} else {
+		return fib(n - 1) + fib(n - 2);
+	}
+}
+
+func test(n i32, end i32) {
+	while (n < end) {
+		_hexout_(fib(n));
+		n = n + 1;
+	}
+}
+	
+func start() i32 {
+	test(0, 30);
+	return 7;
+}

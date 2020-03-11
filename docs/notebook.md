@@ -2,6 +2,40 @@
 
 A place to jot down ideas and/or commentary about the work in progress.
 
+### 2020 Mar 10 - Non-optimal codegen
+
+When a break / continue / return takes control out of a scope, we're
+not smart enough to discard stuff like the jump-around-else emitted
+at the end of an if block, resulting in a dead branch op:
+
+```text
+	if (n < 2) {
+		return n;
+
+00000020: 80e00004  ldw r0, [sp, 4]
+00000024: e700000d  b 0x5c
+00000028: e700000c  b 0x5c
+```
+
+We move return values from r0 to a temp register to cover cases where
+we may immediately need r0 again (another call, etc) but that means
+extra instructions and copies in other cases like `return fib(n - 1) + fib(n - 2);`
+
+```text
+0000002c: 88e00004  ldw r8, [sp, 4]   # get n
+00000030: 40890001  sub r0, r8, 1     # r0 = n - 1
+00000034: f7fffff3  bl 0x4            # r0 = fib(r0)
+00000038: 08000000  mov r8, r0        # r0 -> tmp0
+0000003c: 89e00004  ldw r9, [sp, 4]   # get n
+00000040: 40990002  sub r0, r9, 2     # r0 = n - 2
+00000044: a8e00008  stw r8, [sp, 8]   # save tmp0
+00000048: f7ffffee  bl 0x4            # r0 = fib(r0)
+0000004c: 88e00008  ldw r8, [sp, 8]   # restore tmp0
+00000050: 09000000  mov r9, r0        # r0 -> tmp1
+00000054: 00880009  add r0, r8, r9    # r0 = tmp0 + tmp1
+00000058: e7000000  b 0x5c            # jump to epilogue (return)
+```
+
 ### 2020 Mar 09 - Simplifying the Code
 
 Up til now I had been passing around a "compiler context" pointer, so

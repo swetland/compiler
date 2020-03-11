@@ -89,6 +89,6 @@ int main(int argc, char** argv) {
 	// set SP
 	risc_set_register(r, 14, sp);
 
-	risc_run(r, 100000);
+	risc_run(r, 100000000);
 	return 0;
 }
