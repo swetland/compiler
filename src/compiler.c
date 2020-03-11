@@ -108,9 +108,10 @@ struct StringRec {
 
 struct ScopeRec {
 	u32 kind;
-	Scope next;    // next in scope stack
-	Object first;  // first object in this scope
-	u32 level;     // height in stack (0 == globals, ...)
+	Scope next;     // next in scope stack
+	Object first;   // first object in this scope
+	u32 level;      // height in stack (0 == globals, ...)
+	u32 save_stack; // previous alloc_stack to restore on pop
 	Fixup fixups;
 };
 
@@ -236,7 +237,9 @@ struct CtxRec {
 
 	Object fn;             // function being compiled if non-nil
 	u32 spill_stack;       // where to spill temp regs (TODO: dynamic)
-	u32 local_stack;       // how much stack we use (adjusted for vars, etc)
+	u32 local_stack;       // total stack for all locals (params, vars, tmps)
+	u32 alloc_stack;       // where to allocate next var (grows/shrinks as
+	                       // we enter/exit scopes)
 
 	Type type_void;
 	Type type_byte;
@@ -784,6 +787,9 @@ Scope push_scope(u32 kind, Object obj) {
 	scope->level = ctx.scope->level + 1;
 	scope->fixups = nil;
 
+	// save current stack offset (next local var)
+	scope->save_stack = ctx.alloc_stack;
+
 	ctx.scope = scope;
 	return scope;
 	// XXX lazy scopes
@@ -793,6 +799,10 @@ void pop_scope() {
 	if (ctx.scope->level == 0) {
 		error("cannot pop the global scope");
 	}
+
+	// restore prev stack offset (next local var)
+	ctx.alloc_stack = ctx.scope->save_stack;
+
 	fixup_branches_fwd(ctx.scope->fixups);
 	// XXX delete?
 	ctx.scope = ctx.scope->next;
@@ -1193,6 +1203,58 @@ void parse_break() {
 	add_scope_fixup(scope);
 }
 
+void parse_local_var() {
+	String name = parse_name("variable name");
+	// TODO: allow type inference
+	Type type = parse_type(false);
+
+	Object lvar = make_param(name, type, 0, ctx.alloc_stack);
+	lvar->next = ctx.scope->first;
+	ctx.scope->first = lvar;
+
+	// TODO: size from type
+	ctx.alloc_stack = ctx.alloc_stack + 4;
+	if (ctx.local_stack < ctx.alloc_stack) {
+		ctx.local_stack = ctx.alloc_stack;
+	}
+
+	if (ctx.tok == tASSIGN) {
+		next();
+		ItemRec x, y;
+		parse_expr(&x);
+		set_item(&y, iParam, type, 0, lvar->value, 0);
+		gen_store(&x, &y);
+	}
+	require(tSEMI);
+}
+
+void parse_expr_statement() {
+	ItemRec x;
+	parse_expr(&x);
+	if (ctx.tok == tASSIGN) {
+		next();
+		ItemRec y;
+		parse_expr(&y);
+		gen_store(&y, &x);
+	} else if ((ctx.tok == tINC) || (ctx.tok == tDEC)) {
+		ItemRec y, z;
+		set_item(&y, iConst, ctx.type_int32, 0, 1, 0);
+		// loading x will transform it, so save a copy for storing after
+		set_item(&z, x.kind, x.type, x.r, x.a, x.b);
+		z.flags = x.flags;
+		if (ctx.tok == tINC) {
+			gen_add_op(aADD, &x, &y);
+		} else {
+			gen_add_op(aSUB, &x, &y);
+		}
+		gen_store(&x, &z);
+		next();
+	} else {
+		gen_discard(&x);
+	}
+	require(tSEMI);
+}
+
 void parse_block() {
 	while (true) {
 		if (ctx.tok == tCBRACE) {
@@ -1210,25 +1272,14 @@ void parse_block() {
 		} else if (ctx.tok == tIF) {
 			next();
 			parse_if();
+		} else if (ctx.tok == tVAR) {
+			next();
+			parse_local_var();
 		} else if (ctx.tok == tSEMI) {
 			next();
 			// empty statement
 		} else {
-			ItemRec x;
-			parse_expr(&x);
-			if (ctx.tok == tASSIGN) {
-				next();
-				ItemRec y;
-				parse_expr(&y);
-				gen_store(&y, &x);
-			} else if ((ctx.tok == tINC) || (ctx.tok == tDEC)) {
-				ItemRec y;
-				set_item(&y, iConst, ctx.type_int32, 0, 1, 0);
-				next();
-			} else {
-				gen_discard(&x);
-			}
-			require(tSEMI);
+			parse_expr_statement();
 		}
 	}
 }
@@ -1584,7 +1635,7 @@ void gen_load_reg(Item x, u32 r) {
 	} else if (x->kind == iParam) {
 		emit_mem(LDW, r, SP, x->a);
 	} else {
-		error("gen_load failed");
+		error("gen_load failed (kind %u)", x->kind);
 	}
 	x->kind = iReg;
 	x->r = r;
@@ -1889,6 +1940,7 @@ void gen_prologue(Object fn) {
 	// OPT: would be nice to only reserve space we need
 	ctx.spill_stack = off;
 	ctx.local_stack = off + 4 * tmp_reg_count;
+	ctx.alloc_stack = ctx.local_stack;
 }
 
 void gen_epilogue(Object fn) {

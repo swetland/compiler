@@ -7,14 +7,11 @@ func fib(n i32) i32 {
 	}
 }
 
-func test(n i32, end i32) {
-	while (n < end) {
-		_hexout_(fib(n));
-		n = n + 1;
-	}
-}
-	
 func start() i32 {
-	test(0, 30);
+	var n i32 = 0;
+	while n < 30 {
+		_hexout_(fib(n));
+		n++;
+	}
 	return 7;
 }
