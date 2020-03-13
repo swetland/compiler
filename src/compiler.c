@@ -171,13 +171,12 @@ struct ObjectRec {
 // Object Kind IDs
 enum {           // value
 	oConst,  // const value
-	oGlobal, // global offset
+	oGlobal, // static base offset
 	oVar,    // frame offset
-	oParam,  // param slot
+	oParam,  // frame offset
 	oField,  // record offset
 	oType,   // type-desc-ptr
 	oFunc,   // address
-	oScope,  // scope depth
 };
 
 // Object Flags
@@ -231,11 +230,8 @@ struct ItemRec {
 // Item Kind IDs
 enum {           // r       a         b
 	iConst,  // -       value     -
-	iVar,    // base    offset
-	iParam,  // -       offset0   offset1
 	iReg,    // regno
 	iRegInd, // regno   offset
-	iCond,   // ccode   f-chain   t-chain
 	iComp,   // relop   regno-a   regno-b
 	iFunc,
 };
@@ -263,6 +259,8 @@ struct CtxRec {
 	Scope scope;           // scope stack
 	ScopeRec global;
 
+	u32 alloc_global;      // next available global offset
+
 	Object fn;             // function being compiled if non-nil
 	u32 spill_stack;       // where to spill temp regs (TODO: dynamic)
 	u32 local_stack;       // total stack for all locals (params, vars, tmps)
@@ -277,6 +275,7 @@ struct CtxRec {
 	Type type_string;
 
 	u32 code[8192];
+	u32 data[8192];
 	u32 pc;
 
 	// The latest pc that a forward branch has been
@@ -294,6 +293,10 @@ struct CtxRec {
 
 CtxRec ctx;
 
+
+// initialize x as appropriate for obj
+// (which must be a local or global variable or function)
+void gen_item_from_obj(Item x, Object obj);
 
 // generate function prologue and epilogue
 void gen_prologue(Object fn);
@@ -387,17 +390,17 @@ Type make_type(u32 kind, Type base, Object obj,
 	return type;
 }
 
-Object make_param(String name, Type type, u32 flags, u32 value) {
-	Object param = malloc(sizeof(ObjectRec));
-	param->kind = oParam;
-	param->name = name;
-	param->type = type;
-	param->first = nil;
-	param->next = nil;
-	param->flags = flags;
-	param->value = value;
-	param->fixups = nil;
-	return param;
+Object make_var(u32 kind, String name, Type type, u32 flags, u32 value) {
+	Object var = malloc(sizeof(ObjectRec));
+	var->kind = kind;
+	var->name = name;
+	var->type = type;
+	var->first = nil;
+	var->next = nil;
+	var->flags = flags;
+	var->value = value;
+	var->fixups = nil;
+	return var;
 }
 
 void set_item(Item itm, u32 kind, Type type, u32 r, u32 a, u32 b) {
@@ -889,6 +892,15 @@ u32 invert_relop(u32 op) {
 
 void parse_expr(Item x);
 
+String parse_name(const char* what) {
+	if (ctx.tok != tIDN) {
+		error("expected %s, found %s", what, tnames[ctx.tok & 0x7F]);
+	}
+	String str = make_string(ctx.tmp, strlen(ctx.tmp));
+	next();
+	return str;
+}
+
 void parse_operand(Item x) {
 	if (ctx.tok == tNUM) {
 		set_item(x, iConst, ctx.type_int32, 0, ctx.num, 0);
@@ -911,15 +923,30 @@ void parse_operand(Item x) {
 		if (obj == nil) {
 			error("unknown identifier '%s'", str->text);
 		}
-		if (obj->kind == oParam) {
-			set_item(x, iParam, obj->type, 0, obj->value, 0);
-		} else if (obj->kind == oFunc) {
-			set_item(x, iFunc, obj->type, 0, 0, 0);
-		} else {
-			error("unsupported identifier");
-		}
+		gen_item_from_obj(x, obj);
 	}
 	next();
+}
+
+void dereference(Item x, String name) {
+	if (x->kind != iRegInd) {
+		error("internal: cannot deref via item kind %u", x->kind);
+	}
+
+	if (x->type->kind == tRecord) {
+		Object field = x->type->first;
+		while (field != nil) {
+			if (field->name == name) {
+				x->type = field->type;
+				x->a = x->a + field->value;
+				return;
+			}
+			field = field->next;
+		}
+		error("field '%s' does not exist", name->text);
+	} else {
+		error("internal: cannot deref non-structs");
+	}
 }
 
 void parse_primary_expr(Item x) {
@@ -946,8 +973,13 @@ void parse_primary_expr(Item x) {
 			require(tCPAREN);
 			gen_call(x);
 		} else if (ctx.tok == tDOT) {
-			error("<TODO> field deref");
+			next();
+			String name = parse_name("field name");
+			dereference(x, name);
+			//error("<TODO> field deref");
 		} else if (ctx.tok == tOBRACK) {
+			next();
+			require(tCBRACK);
 			error("<TODO> array deref");
 		} else {
 			break;
@@ -1027,15 +1059,6 @@ void parse_expr(Item x) {
 		parse_and_expr(&y);
 		error("<TODO> or op");
 	}
-}
-
-String parse_name(const char* what) {
-	if (ctx.tok != tIDN) {
-		error("expected %s, found %s", what, tnames[ctx.tok & 0x7F]);
-	}
-	String str = make_string(ctx.tmp, strlen(ctx.tmp));
-	next();
-	return str;
 }
 
 Type find_type(String name) {
@@ -1246,12 +1269,80 @@ void parse_break() {
 	add_scope_fixup(scope);
 }
 
+void STORE(u32 val, u32* ptr, u32 n, u32 sz) {
+	if (sz == 4) {
+		ptr[n >> 2] = val;
+	} else if (sz == 1) {
+		((u8*)ptr)[n] = val;
+	}
+}
+
+u32 parse_init_constexpr(Type type) {
+	if (type->size > 4) {
+		error("<TODO> larger init constexpr types");
+	}
+	ItemRec x;
+	parse_expr(&x);
+	if (x.kind != iConst) {
+		error("non-constant initializer");
+	}
+	return x.a;
+}
+
+u32 parse_array_init(Object var, u32* data, u32 dmax, u32 sz) {
+	memset(data, 0, dmax);
+	u32 n = 0;
+	while (true) {
+		if (ctx.tok == tCBRACE) {
+			next();
+			break;
+		}
+		if (n >= dmax) {
+			error("initializer too large");
+		}
+		u32 v = parse_init_constexpr(var->type->base);
+		STORE(v, data, n, sz); 
+		n += sz;
+		if (ctx.tok != tCBRACE) {
+			require(tCOMMA);
+		}
+	}
+	return n;
+}
+
+void parse_struct_init(Object var, u32* data) {
+	memset(data, 0, var->type->size);
+	while (true) {
+		if (ctx.tok == tCBRACE) {
+			next();
+			break;
+		}
+		String name = parse_name("field name");
+		Object field = var->type->first;
+		while (true) {
+			if (field == nil) {
+				error("structure has no '%s' field", name->text);
+			}
+			if (field->name == name) {
+				break;
+			}
+			field = field->next;
+		}
+		require(tCOLON);
+		u32 v = parse_init_constexpr(field->type);
+		STORE(v, data, field->value, 4);
+		if (ctx.tok != tCBRACE) {
+			require(tCOMMA);
+		}
+	}
+}
+
 void parse_local_var() {
 	String name = parse_name("variable name");
 	// TODO: allow type inference
 	Type type = parse_type(false);
 
-	Object lvar = make_param(name, type, 0, ctx.alloc_stack);
+	Object lvar = make_var(oVar, name, type, 0, ctx.alloc_stack);
 	lvar->next = ctx.scope->first;
 	ctx.scope->first = lvar;
 
@@ -1264,8 +1355,43 @@ void parse_local_var() {
 		next();
 		ItemRec x, y;
 		parse_expr(&x);
-		set_item(&y, iParam, type, 0, lvar->value, 0);
+		gen_item_from_obj(&y, lvar);
 		gen_store(&x, &y);
+	}
+	require(tSEMI);
+}
+
+void parse_global_var() {
+	String name = parse_name("variable name");
+	// TODO: allow type inference
+	Type type = parse_type(false);
+
+	Object gvar = make_var(oGlobal, name, type, 0, ctx.alloc_global);
+	gvar->next = ctx.scope->first;
+	ctx.scope->first = gvar;
+	ctx.alloc_global = ctx.alloc_global + type->size;
+
+	if (ctx.tok == tASSIGN) {
+		next();
+		if (ctx.tok == tOBRACE) {
+			next();
+			u32* data = ctx.data + (gvar->value >> 2);
+			if (type->kind == tArray) {
+				parse_array_init(gvar, data, type->size, type->base->size);
+			} else if (type->kind == tRecord) {
+				parse_struct_init(gvar, data);
+			} else {
+				error("cannot initialize this way");
+			}
+		} else {
+			ItemRec x;
+			parse_expr(&x);
+			if (x.kind != iConst) {
+				error("non-constant global initializer");
+			}
+			//TODO: check type/size compat
+			ctx.data[gvar->value >> 2] = x.a;
+		}
 	}
 	require(tSEMI);
 }
@@ -1357,7 +1483,7 @@ Object parse_param(String fname, u32 n, Object first, Object last) {
 	}
 	String pname = parse_name("parameter name");
 	Type ptype = parse_type(false);
-	Object param = make_param(pname, ptype, 0, 4 + n * 4);
+	Object param = make_var(oParam, pname, ptype, 0, 4 + n * 4);
 
 	Object obj = first;
 	while (obj != nil) {
@@ -1379,12 +1505,12 @@ void make_builtin(const char* name, u32 id, Type p0, Type p1, Type rtn) {
 	type->obj = make_object(oFunc, fname, type, nil, ofBuiltin, id);
 
 	if (p0 != nil) {
-		Object param = make_param(make_string("a", 1), p0, 0, 0);
+		Object param = make_var(oParam, make_string("a", 1), p0, 0, 0);
 		type->obj->first = param;
 		type->first = param;
 		type->len = 1;
 		if (p1 != nil) {
-			param->next = make_param(make_string("b", 1), p1, 0, 1);
+			param->next = make_var(oParam, make_string("b", 1), p1, 0, 1);
 			type->len = 2;
 		}
 	}
@@ -1495,10 +1621,6 @@ void parse_type_def() {
 		// XXX discard type
 	}
 	require(tSEMI);
-}
-
-void parse_global_var() {
-	error("<TODO> global var");
 }
 
 void parse_program() {
@@ -1658,6 +1780,21 @@ u32 mul_op_to_ins(u32 op) {
 	return mul_op_to_ins_tab[op];
 }
 
+// parser does not know internal details like "which register is SP"
+// so the backend needs to initialize variable objects for it
+void gen_item_from_obj(Item x, Object obj) {
+	if ((obj->kind == oParam) || (obj->kind == oVar)) {
+		set_item(x, iRegInd, obj->type, SP, obj->value, 0);
+	} else if (obj->kind == oGlobal) {
+		set_item(x, iRegInd, obj->type, SB, obj->value, 0);
+	} else if (obj->kind == oFunc) {
+		set_item(x, iFunc, obj->type, 0, obj->value, 0);
+	} else {
+		error("unsupported identifier");
+	}
+}
+
+
 // check to see if the last emitted instruction
 // loaded a particular register and if so, patch
 // it to load a different register
@@ -1688,8 +1825,8 @@ void gen_load_reg(Item x, u32 r) {
 		}
 	} else if (x->kind == iConst) {
 		emit_mov(r, x->a);
-	} else if (x->kind == iParam) {
-		emit_mem(LDW, r, SP, x->a);
+	} else if (x->kind == iRegInd) {
+		emit_mem(LDW, r, x->r, x->a);
 	} else {
 		error("gen_load failed (kind %u)", x->kind);
 	}
@@ -1713,8 +1850,8 @@ void gen_load(Item x) {
 
 void gen_store(Item val, Item var) {
 	gen_load(val);
-	if (var->kind == iParam) {
-		emit_mem(STW, val->r, SP, var->a);
+	if (var->kind == iRegInd) {
+		emit_mem(STW, val->r, var->r, var->a);
 		put_reg(val->r);
 	} else {
 		error("gen_store: invalid target");
@@ -1958,7 +2095,6 @@ void fixup_branch_fwd(u32 addr) {
 		// provided it's safe to do so (no branches are
 		// already arriving here...)
 		ctx.pc -= 4;
-		fprintf(stderr, "DELETED BRANCH @ 0x%x\n", ctx.pc);
 	} else {
 		u32 off = (ctx.pc - addr - 4) >> 2;
 		u32 ins = ctx.code[addr >> 2] & 0xFF000000;
@@ -2016,8 +2152,8 @@ void gen_epilogue(Object fn) {
 
 
 void gen_start() {
-	// placeholder branch to init
-	emit_bi(AL, 0);
+	emit_mov(SB, 0); // placeholder SB load
+	emit_bi(AL, 0);  // placeholder branch to init
 }
 
 void gen_end() {
@@ -2030,8 +2166,12 @@ void gen_end() {
 		if (obj->first != nil) {
 			error("'start' must have no parameters\n");
 		}
-		// patch branch at addr 0
-		ctx.code[0] |= (obj->value - 4) >> 2;
+		// patch static base load to after the last instruction
+		ctx.code[0] |= ctx.pc;
+		// patch branch-to-start
+		ctx.code[1] |= (obj->value - 8) >> 2;
+		// TODO: copy ro globals after code
+		// TODO: SB should neg-index into ro, pos-index into rw
 		return;
 	}
 	error("no 'start' function\n");
@@ -2045,6 +2185,13 @@ void gen_write(const char* outname) {
 	u32 n = 0;
 	while (n < ctx.pc) {
 		if (write(fd, ctx.code + (n/4), sizeof(u32)) != sizeof(u32)) {
+			error("error writing '%s'", outname);
+		}
+		n += 4;
+	}
+	n = 0;
+	while (n < ctx.alloc_global) {
+		if (write(fd, ctx.data + (n/4), sizeof(u32)) != sizeof(u32)) {
 			error("error writing '%s'", outname);
 		}
 		n += 4;
@@ -2089,6 +2236,11 @@ void gen_listing(const char* listfn, const char* srcfn) {
 		}
 		risc5dis(n, ins, buf);
 		fprintf(fout, "%08x: %08x  %s\n", n, ins, buf);
+		n += 4;
+	}
+	n = 0;
+	while (n < ctx.alloc_global) {
+		fprintf(fout, "%08x: %08x\n", ctx.pc + n, ctx.data[n >> 2]);
 		n += 4;
 	}
 	fclose(fout);

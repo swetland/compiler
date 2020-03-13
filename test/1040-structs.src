@@ -1,0 +1,22 @@
+
+type Point struct {
+	x i32,
+	y i32,
+};
+
+type Line struct {
+	start Point,
+	end Point,
+};
+
+var p0 Point = { x: 45, y: 17 };
+
+func start() i32 {
+	_hexout_(p0.x);
+	_hexout_(p0.y);
+	p0.x = 123;
+	p0.y = 456;
+	_hexout_(p0.x);
+	_hexout_(p0.y);
+	return 0;
+}
