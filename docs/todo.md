@@ -2,16 +2,16 @@
 
 ### Compiler
 
-- [ ] support for structs
 - [ ] support for arrays
-- [ ] support for slices
-- [ ] support for pointers
+- [ ] support for slices & string constants
 - [ ] support for globals, init'ing gp
 - [ ] support for enums, or convert enums to consts
 - [ ] continue
 - [ ] break/continue to label
 - [ ] const / readonly
 - [ ] type inference for var definitions
+- [x] support for pointers
+- [x] support for structs
 - [x] type definition
 - [x] finish if/while flow control
 
@@ -24,6 +24,8 @@
 ### Self-Hosting Cleanup
 
 - [ ] rewrite lexer to use if/else instead of case
+- [ ] table driven lexing
+- [ ] abandon all-source-in-ram approach
 - [ ] eliminate #defines
 
 ### Syntax
