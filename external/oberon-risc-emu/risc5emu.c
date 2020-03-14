@@ -21,6 +21,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <unistd.h>
 
 #include "risc5emu.h"
 #include "risc5emu-fp.h"
@@ -345,6 +346,11 @@ static void risc_store_io(struct RISC *risc, uint32_t address, uint32_t value) {
   case 0x104:
     printf("D %08x\n", value);
     break;
+  case 0x108: {
+    uint8_t x = value;
+    write(0, &x, 1);
+    break;
+  }
   }
   }
 }

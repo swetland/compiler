@@ -7,6 +7,7 @@
 
 int main(int argc, char** argv) {
 	bool trace = false;
+	bool no_cycle_limit = false;
 	const char* fn = NULL;
 	int args = 0;
 
@@ -15,6 +16,8 @@ int main(int argc, char** argv) {
 			args = argc - 2;
 			argv += 2;
 			break;
+		} else if (!strcmp(argv[1], "-n")) {
+			no_cycle_limit = true;
 		} else if (!strcmp(argv[1], "-t")) {
 			trace = true;
 		} else if (argv[1][0] == '-') {
@@ -89,6 +92,9 @@ int main(int argc, char** argv) {
 	// set SP
 	risc_set_register(r, 14, sp);
 
-	risc_run(r, 100000000);
+	do {
+		risc_run(r, 100000000);
+	} while (no_cycle_limit);
+
 	return 0;
 }
