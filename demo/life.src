@@ -1,0 +1,106 @@
+
+var state i32 = 0xd3f56332;
+
+func xorshift32() i32 {
+        state = state ^ (state << 13);
+        state = state ^ ((state >> 17) & 0x7FFF);
+        state = state ^ (state << 5);
+        return state;
+}
+
+var grid [25][80]byte;
+var next [25][80]byte;
+
+func randomize() {
+	var x i32;
+	var y i32 = 1;
+	while (y < 24) {
+		x = 1;
+		while (x < 79) {
+			if ((xorshift32() & 15) < 5) {
+				grid[y][x] = 1;
+			}
+			x++;
+		}
+		y++;
+	}
+}
+
+func update () {
+	var x i32;
+	var y i32 = 1;
+	while (y < 24) {
+		x = 1;
+		while (x < 79) {
+			grid[y][x] = next[y][x];
+			x++;
+		}
+		y++;
+	}
+}
+
+// 1. Any live cell with two or three neighbors survives.
+// 2. Any dead cell with three live neighbors becomes a live cell.
+// 3. All other live cells die in the next generation. Similarly, all other dead cells stay dead.
+
+func compute() {
+	var x i32;
+	var y i32 = 1;
+	while (y < 24) {
+		x = 1;
+		while (x < 79) {
+			var n i32 =
+				grid[y-1][x-1] + grid[y-1][x] + grid[y-1][x+1] +
+				grid[y][x-1]                  +   grid[y][x+1] +
+				grid[y+1][x-1] + grid[y+1][x] + grid[y+1][x+1];
+			if (grid[y][x] == 0) {
+				if (n == 3) {
+					next[y][x] = 1;
+				} else {
+					next[y][x] = 0;
+				}
+			} else {
+				if (n < 2) {
+					next[y][x] = 0;
+				} else if (n > 3) {
+					next[y][x] = 0;
+				} else {
+					next[y][x] = 1;
+				}
+			}
+			x++;
+		}
+		y++;
+	}
+}
+func show() {
+	var x i32;
+	var y i32 = 1;
+	_putc_(0x1b);
+	_putc_(0x5b);
+	_putc_(0x48);
+	while (y < 24) {
+		x = 1;
+		while (x < 79) {
+			if (grid[y][x] != 0) {
+				_putc_(0x78);
+			} else {
+				_putc_(0x20);
+			}
+			x++;
+		}
+		_putc_(0x0a);
+		y++;
+	}
+	while (y < 10000000) { y++; }
+}
+
+func start() i32 {
+        randomize();
+	while (true) {
+        	show();
+		compute();
+		update();
+	}
+	return 0;
+}
