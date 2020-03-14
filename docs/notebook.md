@@ -2,6 +2,100 @@
 
 A place to jot down ideas and/or commentary about the work in progress.
 
+### 2020 Mar 14 - More questionable codegen
+
+All of these from `demo/life.src`
+
+What's up with this mov'ing the constant to r9 instead of just `sub r8, r8, 5`?
+
+```text
+00000098: f7ffffdb  bl 0x8
+0000009c: 08000000  mov r8, r0
+000000a0: 4884000f  and r8, r8, 15
+000000a4: 49000005  mov r9, 5
+000000a8: 08890009  sub r8, r8, r9
+000000ac: ed00000a  bge 0xd8
+
+                        if ((xorshift32() & 15) < 5) {
+```
+
+Hmm...
+
+```text
+gen_load_reg         0x8, <Reg: r=0,a=8,b=0,t=int32>
+gen_code             '0000009c: 08000000  mov r8, r0' 
+gen_load_reg<<<      <Reg: r=8,a=0,b=0,t=int32>
+gen_mul_op           0x3, <Reg: r=8,a=0,b=0,t=int32>, <Const: r=0,a=15,b=0,t=int32>
+gen_code             '000000a0: 4884000f  and r8, r8, 15' 
+gen_rel_op           0x2, <Reg: r=8,a=0,b=0,t=int32>, <Const: r=0,a=5,b=0,t=int32>
+gen_load_reg         0x9, <Const: r=0,a=5,b=0,t=int32>
+gen_code             '000000a4: 49000005  mov r9, 5' 
+gen_load_reg<<<      <Reg: r=9,a=0,b=0,t=int32>
+gen_branch_cond      0x0, <Comp: r=2,a=8,b=9,t=int32>
+gen_code             '000000a8: 08890009  sub r8, r8, r9' 
+gen_code             '000000ac: ed000000  bge 0xb0' 
+```
+
+Hm.  RHS of the rel-op is insufficiently lazy, it looks.
+It loads 5 into a register ahead of `gen_branch_cond`
+
+And the `add r8, r8, 4` at 0xc0 looks fishy too...
+
+```text
+000000b0: 48d80004  add r8, sb, 4
+000000b4: 89e00018  ldw r9, [sp, 24]
+000000b8: 499a0050  mul r9, r9, 80
+000000bc: 08880009  add r8, r8, r9
+000000c0: 48880004  add r8, r8, 4
+000000c4: 89e00014  ldw r9, [sp, 20]
+000000c8: 08880009  add r8, r8, r9
+000000cc: 49000001  mov r9, 1
+000000d0: b9800004  stb r9, [r8, 4]
+
+                                grid[y][x] = 1;
+```
+
+```text
+gen_item_from_obj<<< <RegInd: r=13,a=4,b=0,t=[25][80]byte>
+gen_item_from_obj<<< <RegInd: r=14,a=24,b=0,t=int32>
+gen_index            <RegInd: r=13,a=4,b=0,t=[25][80]byte>, <RegInd: r=14,a=24,b=0,t=int32>
+gen_address_reg      0x8, <RegInd: r=13,a=4,b=0,t=[25][80]byte>
+gen_code             '000000b0: 48d80004  add r8, sb, 4' 
+gen_load_reg         0x9, <RegInd: r=14,a=24,b=0,t=int32>
+gen_code             '000000b4: 89e00018  ldw r9, [sp, 24]' 
+gen_load_reg<<<      <Reg: r=9,a=0,b=0,t=int32>
+gen_code             '000000b8: 499a0050  mul r9, r9, 80' 
+gen_code             '000000bc: 08880009  add r8, r8, r9' 
+gen_index<<<         <RegInd: r=8,a=4,b=0,t=[80]byte>
+gen_item_from_obj<<< <RegInd: r=14,a=20,b=0,t=int32>
+gen_index            <RegInd: r=8,a=4,b=0,t=[80]byte>, <RegInd: r=14,a=20,b=0,t=int32>
+gen_address_reg      0x8, <RegInd: r=8,a=4,b=0,t=[80]byte>
+gen_code             '000000c0: 48880004  add r8, r8, 4' 
+gen_load_reg         0x9, <RegInd: r=14,a=20,b=0,t=int32>
+gen_code             '000000c4: 89e00014  ldw r9, [sp, 20]' 
+gen_load_reg<<<      <Reg: r=9,a=0,b=0,t=int32>
+gen_code             '000000c8: 08880009  add r8, r8, r9' 
+gen_index<<<         <RegInd: r=8,a=4,b=0,t=byte>
+gen_gen_store        <Const: r=0,a=1,b=0,t=int32>, <RegInd: r=8,a=4,b=0,t=byte>
+gen_load_reg         0x9, <Const: r=0,a=1,b=0,t=int32>
+gen_code             '000000cc: 49000001  mov r9, 1' 
+gen_load_reg<<<      <Reg: r=9,a=0,b=0,t=int32>
+gen_code             '000000d0: b9800004  stb r9, [r8, 4]' 
+```
+
+### 2020 Mar 14 - stdlib deps
+
+Quick check to see how much libc the compiler is depending on...
+
+Not too bad.
+
+unistd/syscall: open close read write exit\
+buffered: fopen fclose fgets fputs fwrite
+formatted: printf fprintf vfprintf\
+memory: malloc memcmp memcpy memset strlen\
+misc: putchar puts exit abort\
+
+
 ### 2020 Mar 10 - Non-optimal codegen
 
 When a break / continue / return takes control out of a scope, we're
