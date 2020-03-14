@@ -2,7 +2,6 @@
 
 ### Compiler
 
-- [ ] support for arrays
 - [ ] support for slices & string constants
 - [ ] support for globals, init'ing gp
 - [ ] support for enums, or convert enums to consts
@@ -10,6 +9,7 @@
 - [ ] break/continue to label
 - [ ] const / readonly
 - [ ] type inference for var definitions
+- [x] support for arrays
 - [x] support for pointers
 - [x] support for structs
 - [x] type definition

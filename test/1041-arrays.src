@@ -21,7 +21,6 @@ func start() i32 {
 		n++;
 	}
 	_hexout_(m);
-	// todo: pass array refs correctly
-	//dump(data);
+	dump(data);
 	return n;
 }

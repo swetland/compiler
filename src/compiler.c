@@ -341,6 +341,7 @@ void gen_discard(Item val);
 
 // sets up call param #n, consuming val
 void gen_param(u32 n, Item val);
+void gen_ref_param(u32 n, Item val);
 
 // call func, consumes parameters and func
 void gen_call(Item func);
@@ -999,7 +1000,11 @@ void parse_primary_expr(Item x) {
 				if (!compatible_type(param->type, y.type)) {
 					error("incompatible type for parameter '%s'\n", param->name->text);
 				}
-				gen_param(n, &y);
+				if (param->type->kind == tArray) {
+					gen_ref_param(n, &y);
+				} else {
+					gen_param(n, &y);
+				}
 				param = param->next;
 				n++;
 			}
@@ -1845,7 +1850,17 @@ u32 mul_op_to_ins(u32 op) {
 // parser does not know internal details like "which register is SP"
 // so the backend needs to initialize variable objects for it
 void gen_item_from_obj(Item x, Object obj) {
-	if ((obj->kind == oParam) || (obj->kind == oVar)) {
+	if (obj->kind == oParam) {
+		if (obj->type->kind == tArray) {
+			// arrays are passed by reference through parameters
+			// maybe this should be better represented?
+			u32 r = get_reg_tmp();
+			emit_mem(LDW, r, SP, obj->value);
+			set_item(x, iRegInd, obj->type, r, 0, 0);
+		} else {
+			set_item(x, iRegInd, obj->type, SP, obj->value, 0);
+		}
+	} else if (obj->kind == oVar) {
 		set_item(x, iRegInd, obj->type, SP, obj->value, 0);
 	} else if (obj->kind == oGlobal) {
 		set_item(x, iRegInd, obj->type, SB, obj->value, 0);
@@ -1906,6 +1921,8 @@ void gen_load_reg(Item x, u32 r) {
 	}
 	x->kind = iReg;
 	x->r = r;
+	x->a = 0;
+	x->b = 0;
 	gen_trace("load_reg<<<", x, nil);
 }
 
@@ -1944,20 +1961,32 @@ void gen_store(Item val, Item adr) {
 	}
 }
 
-// convert RegInd+off to RegInd+0
-// migrate to a tmpreg if not already
-void gen_address(Item x) {
-	i32 r = x->r;
-	if (!is_tmp_reg(r)) {
-		r = get_reg_tmp();
+void gen_address_reg(Item x, i32 r) {
+	gen_trace_n("address_reg", r, x, nil);
+	if (x->kind != iRegInd) {
+		error("internal error, wrong kind");
 	}
 	if (x->a > 0) {
 		emit_opi_n(ADD, r, x->r, x->a);
 	} else if(r != x->r) {
 		emit_op(MOV, r, 0, x->r);
 	}
-	x->r = r;
+	if (r != x->r) {
+		put_reg(x->r);
+		x->r = r;
+	}
 }
+
+// convert RegInd+off to RegInd+0
+// migrate to a tmpreg if not already
+void gen_address(Item x) {
+	if (!is_tmp_reg(x->r)) {
+		gen_address_reg(x, get_reg_tmp());
+	} else {
+		gen_address_reg(x, x->r);
+	}
+}
+
 
 void gen_index(Item x, Item idx) {
 	gen_trace("index", x, idx);
@@ -2047,6 +2076,14 @@ void gen_return(Item x) {
 	}
 	emit_bi(AL, 0);
 	add_scope_fixup(find_scope(sFunc));
+}
+
+void gen_ref_param(u32 n, Item val) {
+	gen_trace_n("ref_param", n, val, nil);
+	if (n > 7) {
+		error("gen_ref_param - too many parameters");
+	}
+	gen_address_reg(val, n);
 }
 
 void gen_param(u32 n, Item val) {
