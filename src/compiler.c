@@ -463,6 +463,7 @@ Type setup_type(const char* text, u32 tlen, u32 kind, u32 size) {
 
 enum {
 	biPrintHex32,
+	biPutC,
 };
 
 void make_builtin(const char* name, u32 id, Type p0, Type p1, Type rtn);
@@ -483,6 +484,7 @@ void init_ctx() {
 	ctx.line = "";
 
 	make_builtin("_hexout_", biPrintHex32, ctx.type_int32, nil, ctx.type_void);
+	make_builtin("_putc_", biPutC, ctx.type_int32, nil, ctx.type_void);
 }
 
 bool same_type(Type a, Type b) {
@@ -2099,6 +2101,9 @@ void gen_builtin(u32 id) {
 	if (id == biPrintHex32) {
 		emit_mov(1, 0xFFFF0000);    // MOV R1, IOBASE
 		emit_mem(STW, 0, 1, 0x104); // SW R0, [R1, 0x104]
+	} else if (id == biPutC) {
+		emit_mov(1, 0xFFFF0000);    // MOV R1, IOBASE
+		emit_mem(STW, 0, 1, 0x108); // SW R0, [R1, 0x108]
 	} else {
 		error("unknown builtin function");
 	}
