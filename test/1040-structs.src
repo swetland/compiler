@@ -9,7 +9,18 @@ type Line struct {
 	end Point,
 };
 
+func add(a *Point, b *Point) {
+	a.x = a.x + b.x;
+	a.y = a.y + b.y;
+}
+
+func print(p *Point) {
+	_hexout_(p.x);
+	_hexout_(p.y);
+}
+
 var p0 Point = { x: 45, y: 17 };
+var p1 Point = { x: 5, y: 3 };
 
 func start() i32 {
 	_hexout_(p0.x);
@@ -18,5 +29,7 @@ func start() i32 {
 	p0.y = 456;
 	_hexout_(p0.x);
 	_hexout_(p0.y);
+	add(&p1, &p0);
+	print(&p1);
 	return 0;
 }

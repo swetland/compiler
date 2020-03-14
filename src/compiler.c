@@ -13,6 +13,8 @@
 #include <unistd.h>
 #include <sys/stat.h>
 
+#include "risc5.h"
+
 #define FNMAXARGS 8
 
 #define nil 0
@@ -215,6 +217,7 @@ const char* type_id_tab[] = {
 	"void", "byte", "bool", "int32", "nil", "*", "[]", "[]",
 	"struct", "func", "undef",
 };
+void print_type(Type t);
 
 // ------------------------------------------------------------------
 
@@ -235,6 +238,9 @@ enum {           // r       a         b
 	iComp,   // relop   regno-a   regno-b
 	iFunc,
 };
+
+const char* item_id_tab[] = { "Const", "Reg", "RegInd", "Comp", "Func" };
+void print_item(Item x);
 
 
 // Item Flags
@@ -293,6 +299,11 @@ struct CtxRec {
 
 CtxRec ctx;
 
+bool TRACE_CODEGEN = false;
+
+void gen_trace(const char* fn, Item x, Item y);
+void gen_trace_n(const char* fn, u32 n, Item x, Item y);
+void gen_trace_code(const char* msg, u32 pc);
 
 // initialize x as appropriate for obj
 // (which must be a local or global variable or function)
@@ -315,6 +326,12 @@ void gen_unary_op(u32 op, Item x);
 
 // stores val into var, consuming both
 void gen_store(Item val, Item var);
+
+// consume ptr item, transforming into thing-pointed-at
+void gen_deref_ptr(Item x);
+
+// consume a memory-based item, transforming into an address (ptr)
+void gen_get_ptr(Item x);
 
 // release any registers or other resources held by this item
 void gen_discard(Item val);
@@ -783,17 +800,17 @@ void print() {
 	case tIDN: printf("@%s ", ctx.tmp); break;
 	case tEOL: printf("\n"); break;
 	case tSTR: printstr(ctx.tmp); break;
-	default:   printf("%s ", tnames[ctx.tok & 0x7F]); break;
+	default:   printf("%s ", tnames[ctx.tok]); break;
 	}
 }
 
 void expected(const char* what) {
-	error("expected %s, found %s", what, tnames[ctx.tok & 0x7F]);
+	error("expected %s, found %s", what, tnames[ctx.tok]);
 }
 
 void expect(token_t tok) {
 	if (ctx.tok != tok) {
-		error("expected %s, found %s", tnames[tok], tnames[ctx.tok & 0x7F]);
+		error("expected %s, found %s", tnames[tok], tnames[ctx.tok]);
 	}
 }
 
@@ -894,7 +911,7 @@ void parse_expr(Item x);
 
 String parse_name(const char* what) {
 	if (ctx.tok != tIDN) {
-		error("expected %s, found %s", what, tnames[ctx.tok & 0x7F]);
+		error("expected %s, found %s", what, tnames[ctx.tok]);
 	}
 	String str = make_string(ctx.tmp, strlen(ctx.tmp));
 	next();
@@ -975,8 +992,15 @@ void parse_primary_expr(Item x) {
 		} else if (ctx.tok == tDOT) {
 			next();
 			String name = parse_name("field name");
-			dereference(x, name);
-			//error("<TODO> field deref");
+			if (x->type->kind == tRecord) {
+				dereference(x, name);
+			} else if ((x->type->kind == tPointer) &&
+				(x->type->base->kind == tRecord)) {
+				gen_deref_ptr(x);
+				dereference(x, name);
+			} else {
+				error("can only use '.' with struct or pointer-to-struct");
+			}
 		} else if (ctx.tok == tOBRACK) {
 			next();
 			require(tCBRACK);
@@ -1002,7 +1026,8 @@ void parse_unary_expr(Item x) {
 		}
 	} else if (ctx.tok == tAMP) {
 		next();
-		error("<TODO> get pointer");
+		parse_unary_expr(x);
+		gen_get_ptr(x);
 	} else {
 		parse_primary_expr(x);
 	}
@@ -1653,6 +1678,10 @@ void parse_program() {
 #define tmp_reg_first  8
 #define tmp_reg_last  11
 
+bool is_tmp_reg(u32 n) {
+	return (n >= tmp_reg_first) && (n <= tmp_reg_last);
+}
+
 u32 get_reg_tmp() {
 	u32 n = tmp_reg_first;
 	while (n <= tmp_reg_last) {
@@ -1680,6 +1709,7 @@ void put_reg(u32 r) {
 
 void emit(u32 ins) {
 	ctx.code[ctx.pc / 4] = ins;
+	gen_trace_code("", ctx.pc);
 	ctx.pc = ctx.pc + 4;
 }
 
@@ -1792,6 +1822,7 @@ void gen_item_from_obj(Item x, Object obj) {
 	} else {
 		error("unsupported identifier");
 	}
+	gen_trace("item_from_obj<<<", x, nil);
 }
 
 
@@ -1809,11 +1840,13 @@ bool patch_last_load(u32 oldr, u32 newr) {
 		return false;
 	}
 	ctx.code[(ctx.pc - 4) / 4] = (ins & 0xF0FFFFFF) | (newr << 24);
+	gen_trace_code("patch_last_load()", (ctx.pc - 4));
 	return true;
 }
 
 // load the value of an item into a specific register
 void gen_load_reg(Item x, u32 r) {
+	gen_trace_n("load_reg", r, x, nil);
 	if (x->kind == iReg) {
 		if (x->r != r) {
 			if (patch_last_load(x->r, r)) {
@@ -1827,14 +1860,19 @@ void gen_load_reg(Item x, u32 r) {
 		emit_mov(r, x->a);
 	} else if (x->kind == iRegInd) {
 		emit_mem(LDW, r, x->r, x->a);
+		if (x->r != r) {
+			put_reg(x->r);
+		}
 	} else {
 		error("gen_load failed (kind %u)", x->kind);
 	}
 	x->kind = iReg;
 	x->r = r;
+	gen_trace("load_reg<<<", x, nil);
 }
 
 void gen_discard(Item x) {
+	gen_trace("discard", x, nil);
 	if (x->kind == iReg) {
 		put_reg(x->r);
 	}
@@ -1843,22 +1881,54 @@ void gen_discard(Item x) {
 // convert an item to value-in-register format
 // if it's not already in that format
 void gen_load(Item x) {
-	if (x->kind != iReg) {
+	if ((x->kind == iRegInd) && is_tmp_reg(x->r)) {
+		gen_load_reg(x, x->r);
+	} else if (x->kind != iReg) {
 		gen_load_reg(x, get_reg_tmp());
 	}
 }
 
-void gen_store(Item val, Item var) {
+void gen_store(Item val, Item adr) {
+	gen_trace("gen_store", val, adr);
 	gen_load(val);
-	if (var->kind == iRegInd) {
-		emit_mem(STW, val->r, var->r, var->a);
+	if (adr->kind == iRegInd) {
+		emit_mem(STW, val->r, adr->r, adr->a);
 		put_reg(val->r);
+		put_reg(adr->r);
 	} else {
 		error("gen_store: invalid target");
 	}
 }
 
+void gen_deref_ptr(Item x) {
+	gen_trace("deref_ptr", x, nil);
+	gen_load(x);
+	if (x->kind != iReg) {
+		error("internal - ptr deref failed");
+	}
+	x->type = x->type->base;
+	x->kind = iRegInd;
+	x->a = 0;
+	gen_trace("deref_ptr<<<", x, nil);
+}
+
+void gen_get_ptr(Item x) {
+	gen_trace("get_ptr", x, nil);
+	if (x->kind != iRegInd) {
+		error("internal - get ptr failed");
+	}
+	x->kind = iReg;
+	if (x->a != 0) {
+		emit_opi_n(ADD, x->r, x->r, x->a);
+		x->a = 0;
+	}
+	// TODO: can we cache these or be sure to recycle them later?
+	x->type = make_type(tPointer, x->type, nil, nil, 0, 4);
+	gen_trace("get_ptr<<<", x, nil);
+}
+
 u32 gen_branch_cond(Item x, bool sense) {
+	gen_trace_n("branch_cond", sense, x, nil);
 	u32 cc;
 	if (x->kind == iComp) {
 		if (sense == false) {
@@ -1885,15 +1955,18 @@ u32 gen_branch_cond(Item x, bool sense) {
 }
 
 u32 gen_branch_fwd() {
+	gen_trace("branch_fwd", nil, nil);
 	emit_bi(AL, 0);
 	return ctx.pc - 4;
 }
 
 void gen_branch_back(u32 addr) {
+	gen_trace_n("branch_back", addr, nil, nil);
 	emit_bi(AL, (addr - ctx.pc - 4) >> 2);
 }
 
 void gen_return(Item x) {
+	gen_trace("return", x, nil);
 	if (x->type != ctx.type_void) {
 		gen_load_reg(x, R0);
 	}
@@ -1902,6 +1975,7 @@ void gen_return(Item x) {
 }
 
 void gen_param(u32 n, Item val) {
+	gen_trace_n("param", n, val, nil);
 	if (n > 7) {
 		error("gen_param - too many parameters");
 	}
@@ -1909,6 +1983,7 @@ void gen_param(u32 n, Item val) {
 }
 
 void gen_builtin(u32 id) {
+	gen_trace_n("builtin", id, nil, nil);
 	if (id == biPrintHex32) {
 		emit_mov(1, 0xFFFF0000);    // MOV R1, IOBASE
 		emit_mem(STW, 0, 1, 0x104); // SW R0, [R1, 0x104]
@@ -1918,6 +1993,7 @@ void gen_builtin(u32 id) {
 }
 
 void gen_save_regs() {
+	gen_trace("save_regs", nil, nil);
 	u32 n = tmp_reg_first;
 	u32 off = ctx.spill_stack;
 	while (n <= tmp_reg_last) {
@@ -1930,6 +2006,7 @@ void gen_save_regs() {
 }
 
 void gen_restore_regs() {
+	gen_trace("restore_regs", nil, nil);
 	u32 n = tmp_reg_first;
 	u32 off = ctx.spill_stack;
 	while (n <= tmp_reg_last) {
@@ -1942,6 +2019,7 @@ void gen_restore_regs() {
 }
 
 void gen_call(Item x) {
+	gen_trace("call", x, nil);
 	gen_save_regs();
 	if (x->type->obj->flags & ofBuiltin) {
 		// OPT: not all builtins will require save/restore regs
@@ -1971,6 +2049,7 @@ void gen_call(Item x) {
 }
 
 void gen_add_op(u32 op, Item x, Item y) {
+	gen_trace_n("add_op", op, x, y);
 	op = add_op_to_ins(op);
 	if ((x->kind == iConst) && (y->kind == iConst)) {
 		// XC = XC op YC
@@ -2000,6 +2079,7 @@ void gen_add_op(u32 op, Item x, Item y) {
 }
 
 void gen_mul_op(u32 op, Item x, Item y) {
+	gen_trace_n("mul_op", op, x, y);
 	op = mul_op_to_ins(op);
 	if ((x->kind == iConst) && (y->kind == iConst)) {
 		// XC = XC op YC
@@ -2050,6 +2130,7 @@ void gen_mul_op(u32 op, Item x, Item y) {
 }
 
 void gen_rel_op(u32 op, Item x, Item y) {
+	gen_trace_n("rel_op", op, x, y);
 	gen_load(x);
 	gen_load(y);
 
@@ -2061,6 +2142,7 @@ void gen_rel_op(u32 op, Item x, Item y) {
 }
 
 void gen_unary_op(u32 op, Item x) {
+	gen_trace_n("unary_op", op, x, nil);
 	if (x->kind == iConst) {
 		if (op == tMINUS) {
 			x->a = - x->a;
@@ -2099,6 +2181,7 @@ void fixup_branch_fwd(u32 addr) {
 		u32 off = (ctx.pc - addr - 4) >> 2;
 		u32 ins = ctx.code[addr >> 2] & 0xFF000000;
 		ctx.code[addr >> 2] = ins | (off & 0x00FFFFFF);
+		gen_trace_code("fixup_branch_fwd()", addr);
 	}
 
 	// note that we have forward branches to this pc
@@ -2115,6 +2198,7 @@ void fixup_branches_fwd(Fixup fixup) {
 }
 
 void gen_prologue(Object fn) {
+	gen_trace("prologue", nil, nil);
 	fn->value = ctx.pc;
 	emit_opi(SUB, SP, SP, 4 + fn->type->len * 4);
 	emit_mem(STW, LR, SP, 0);
@@ -2136,6 +2220,18 @@ void gen_prologue(Object fn) {
 }
 
 void gen_epilogue(Object fn) {
+	gen_trace("epilogue", nil, nil);
+	if (ctx.regbits) {
+		u32 n = tmp_reg_first;
+		while (n <= tmp_reg_last) {
+			if (ctx.regbits & (1 << n)) {
+				fprintf(stderr, "R%u ", n);
+			}
+			n++;
+		}
+		fprintf(stderr,"\n");
+		error("internal - registers reserved in epilogue");
+	}
 	if (ctx.local_stack > 0xFFFF) {
 		error("using too much stack");
 	}
@@ -2143,6 +2239,7 @@ void gen_epilogue(Object fn) {
 	// patch prologue
 	u32 ins = ctx.code[fn->value / 4];
 	ctx.code[fn->value / 4] = (ins & 0xFFFF0000) | ctx.local_stack;
+	gen_trace_code("patch_prologue()", fn->value);
 
 	// emit epilogue
 	emit_mem(LDW, LR, SP, 0);
@@ -2152,11 +2249,13 @@ void gen_epilogue(Object fn) {
 
 
 void gen_start() {
+	gen_trace("start", nil, nil);
 	emit_mov(SB, 0); // placeholder SB load
 	emit_bi(AL, 0);  // placeholder branch to init
 }
 
 void gen_end() {
+	gen_trace("end", nil, nil);
 	String str = make_string("start", 5);
 	Object obj = find(str);
 	while (obj != nil) {
@@ -2198,8 +2297,6 @@ void gen_write(const char* outname) {
 	}
 	close(fd);
 }
-
-#include "risc5.h"
 
 void gen_listing(const char* listfn, const char* srcfn) {
 	FILE* fin = fopen(srcfn, "r");
@@ -2286,6 +2383,65 @@ void dump_context() {
 	}
 }
 
+void print_type(Type type) {
+	if (type->kind == tArray) {
+		fprintf(stderr, "[%u]", type->len);
+		print_type(type->base);
+	} else if (type->kind == tPointer) {
+		fprintf(stderr, "*");
+		print_type(type->base);
+	} else if (type->kind == tRecord) {
+		if (type->obj != nil) {
+			fprintf(stderr, "{}%s", type->obj->name->text);
+		} else {
+			fprintf(stderr, "{}\n");
+		}
+	} else {
+		fprintf(stderr, "%s", type_id_tab[type->kind]);
+	}
+}
+
+void print_item(Item x) {
+	fprintf(stderr, "<%s: r=%d,a=%d,b=%d,t=",
+		item_id_tab[x->kind], x->r, x->a, x->b);
+	print_type(x->type);
+	fprintf(stderr, ">");
+}
+
+void gen_trace(const char* fn, Item x, Item y) {
+	if (TRACE_CODEGEN) {
+		fprintf(stderr, "gen_%-17s", fn);
+		if (x != nil) {
+			print_item(x);
+		}
+		if (y != nil) {
+			fprintf(stderr, ", ");
+			print_item(y);
+		}
+		fprintf(stderr, "\n");
+	}
+}
+void gen_trace_n(const char* fn, u32 n, Item x, Item y) {
+	if (TRACE_CODEGEN) {
+		fprintf(stderr, "gen_%-17s0x%x, ", fn, n);
+		if (x != nil) {
+			print_item(x);
+		}
+		if (y != nil) {
+			fprintf(stderr, ", ");
+			print_item(y);
+		}
+		fprintf(stderr, "\n");
+	}
+}
+void gen_trace_code(const char* msg, u32 pc) {
+	if (TRACE_CODEGEN) {
+		u32 ins = ctx.code[pc >> 2];
+		char buf[64];
+		risc5dis(pc, ins, buf);
+		fprintf(stderr, "gen_code             '%08x: %08x  %s' %s\n", pc, ins, buf, msg);
+	}
+}
 // ================================================================
 
 int main(int argc, char **argv) {
@@ -2314,6 +2470,8 @@ int main(int argc, char **argv) {
 			argv++;
 		} else if (!strcmp(argv[1], "-p")) {
 			dump = true;
+		} else if (!strcmp(argv[1], "-v")) {
+			TRACE_CODEGEN = true;
 		} else if (!strcmp(argv[1], "-A")) {
 			ctx.flags |= cfAbortOnError;
 		} else if (argv[1][0] == '-') {
