@@ -1,0 +1,8 @@
+
+func a1a1a1(aaa [17]i32) {
+}
+
+func bad() {
+	var z [10]i32;
+	a1a1a1(z);
+}	

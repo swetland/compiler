@@ -1,0 +1,27 @@
+
+var numbers [8]byte = { 1, 2, 4, 8, 16, 32, 64, 128 };
+
+var data [8]byte = { 0x10, 0x20, 0x30, 0x40,
+                     0x50, 0x60, 0x70, 0x80 };
+
+func dump(x [8]byte) {
+	var n i32 = 0;
+	while (n < 8) {
+		_hexout_(x[n]);
+		n++;
+	}
+}
+
+func start() i32 {
+	var n i32 = 0;
+	var m i32 = 0;
+	while (n < 8) {
+		_hexout_(numbers[n]);
+		m = m + numbers[n];
+		n++;
+	}
+	_hexout_(m);
+	// todo: pass array refs correctly
+	//dump(data);
+	return n;
+}

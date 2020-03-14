@@ -1,0 +1,6 @@
+
+var blargh [256]byte;
+
+func bad() {
+	var n = blarg[256];
+}

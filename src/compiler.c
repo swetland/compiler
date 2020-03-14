@@ -327,6 +327,9 @@ void gen_unary_op(u32 op, Item x);
 // stores val into var, consuming both
 void gen_store(Item val, Item var);
 
+// replace array item x with element item (at idx)
+void gen_index(Item x, Item idx);
+
 // consume ptr item, transforming into thing-pointed-at
 void gen_deref_ptr(Item x);
 
@@ -481,7 +484,7 @@ void init_ctx() {
 	make_builtin("_hexout_", biPrintHex32, ctx.type_int32, nil, ctx.type_void);
 }
 
-bool sametype(Type a, Type b) {
+bool same_type(Type a, Type b) {
 	if (a->kind != b->kind) {
 		return false;
 	}
@@ -495,7 +498,7 @@ bool sametype(Type a, Type b) {
 	Object b1 = b->first;
 	while ((a1 != nil) && (b1 != nil)) {
 		// check that parameters and fields match
-		if (!sametype(a1->type, b1->type)) {
+		if (!same_type(a1->type, b1->type)) {
 			return false;
 		}
 	}
@@ -504,6 +507,16 @@ bool sametype(Type a, Type b) {
 		return false;
 	}
 	return true;
+}
+
+// for assignments, etc
+bool compatible_type(Type dst, Type src) {
+	if (dst->kind == tInt32) {
+		if (src->kind == tByte) {
+			return true;
+		}
+	}
+	return same_type(dst, src);
 }
 
 void error(const char *fmt, ...) {
@@ -983,6 +996,9 @@ void parse_primary_expr(Item x) {
 				}
 				ItemRec y;
 				parse_expr(&y);
+				if (!compatible_type(param->type, y.type)) {
+					error("incompatible type for parameter '%s'\n", param->name->text);
+				}
 				gen_param(n, &y);
 				param = param->next;
 				n++;
@@ -1003,8 +1019,24 @@ void parse_primary_expr(Item x) {
 			}
 		} else if (ctx.tok == tOBRACK) {
 			next();
+			ItemRec y;
+			parse_expr(&y);
 			require(tCBRACK);
-			error("<TODO> array deref");
+			if (x->type->kind != tArray) {
+				error("can only use [] with array");
+			}
+			if (x->kind != iRegInd) {
+				error("internal: cannot index via item kind %u", x->kind);
+			}
+			if (y.kind == iConst) {
+				if (y.a >= x->type->len) {
+					error("array index out of range");
+				}
+				x->a = x->a + y.a * x->type->base->size;
+				x->type = x->type->base;
+			} else {
+				gen_index(x, &y);
+			}
 		} else {
 			break;
 		}
@@ -1275,7 +1307,7 @@ void parse_return() {
 		x.type = ctx.type_void;
 	} else {
 		parse_expr(&x);
-		if (!sametype(ctx.fn->type->base, x.type)) {
+		if (!compatible_type(ctx.fn->type->base, x.type)) {
 			error("return types do not match");
 		}
 		require(tSEMI);
@@ -1601,7 +1633,7 @@ void parse_function() {
 		Object pb = obj->type->first;
 		u32 i = 1;
 		while ((pa != nil) && (pb != nil)) {
-			if (!sametype(pa->type, pb->type)) {
+			if (!same_type(pa->type, pb->type)) {
 				error("func '%s' param %u differs from decl", fname->text, i);
 			}
 			pa = pa->next;
@@ -1859,7 +1891,13 @@ void gen_load_reg(Item x, u32 r) {
 	} else if (x->kind == iConst) {
 		emit_mov(r, x->a);
 	} else if (x->kind == iRegInd) {
-		emit_mem(LDW, r, x->r, x->a);
+		if (x->type->size == 4) {
+			emit_mem(LDW, r, x->r, x->a);
+		} else if (x->type->size == 1) {
+			emit_mem(LDB, r, x->r, x->a);
+		} else {
+			error("cannot load a size %u item\n", x->type->size);
+		}
 		if (x->r != r) {
 			put_reg(x->r);
 		}
@@ -1892,12 +1930,49 @@ void gen_store(Item val, Item adr) {
 	gen_trace("gen_store", val, adr);
 	gen_load(val);
 	if (adr->kind == iRegInd) {
-		emit_mem(STW, val->r, adr->r, adr->a);
+		if (adr->type->size == 4) {
+			emit_mem(STW, val->r, adr->r, adr->a);
+		} else if (adr->type->size == 1) {
+			emit_mem(STB, val->r, adr->r, adr->a);
+		} else {
+			error("cannot store a size %u item\n", adr->type->size);
+		}
 		put_reg(val->r);
 		put_reg(adr->r);
 	} else {
 		error("gen_store: invalid target");
 	}
+}
+
+// convert RegInd+off to RegInd+0
+// migrate to a tmpreg if not already
+void gen_address(Item x) {
+	i32 r = x->r;
+	if (!is_tmp_reg(r)) {
+		r = get_reg_tmp();
+	}
+	if (x->a > 0) {
+		emit_opi_n(ADD, r, x->r, x->a);
+	} else if(r != x->r) {
+		emit_op(MOV, r, 0, x->r);
+	}
+	x->r = r;
+}
+
+void gen_index(Item x, Item idx) {
+	gen_trace("index", x, idx);
+	gen_address(x);
+	u32 sz = x->type->base->size;
+	gen_load(idx);
+	// OPT: use shifts for powers of two
+	if (sz > 1) {
+		emit_opi_n(MUL, idx->r, idx->r, sz);
+	}
+	// TODO: range check
+	emit_op(ADD, x->r, x->r, idx->r);
+	put_reg(idx->r);
+	x->type = x->type->base;
+	gen_trace("index<<<", x, nil);
 }
 
 void gen_deref_ptr(Item x) {
