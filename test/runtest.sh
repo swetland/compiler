@@ -21,11 +21,12 @@ if bin/compiler -o "$bin" -l "$lst" "$src" 2> "$msg"; then
 	else
 		#echo "RUNTEST: $src: running..."
 		if bin/r5e "$bin" > "$log"; then
-			if diff "$log" "$gold"; then
+			if diff "$log" "$gold" >/dev/null ; then
 				echo "RUNTEST: $src: PASS"
 				echo "PASS: $src" > "$txt"
 			else
 				echo "RUNTEST: $src: FAIL: output differs from expected"
+				diff "$log" "$gold" | head
 				echo "FAIL: %src" > "$txt"
 			fi
 		else
