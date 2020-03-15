@@ -305,6 +305,9 @@ struct CtxRec {
 	u32 data[8192];
 	u32 pc;
 
+	// if nonzero, target for continue
+	u32 pc_continue;
+
 	// The latest pc that a forward branch has been
 	// fixed up to.  cannot safely move code at or
 	// before this address.
@@ -1299,7 +1302,8 @@ void parse_block();
 
 void parse_while() {
 	ItemRec x;
-	u32 l0_loop = ctx.pc; // for backward branch
+	u32 save = ctx.pc_continue;
+	ctx.pc_continue = ctx.pc; // for backward branch
 
 	parse_expr(&x);
 	u32 l1_br_false = gen_branch_cond(&x, false);
@@ -1307,10 +1311,12 @@ void parse_while() {
 	require(tOBRACE);
 	push_scope(sLoop, nil);
 	parse_block();
-	gen_branch_back(l0_loop);
+	gen_branch_back(ctx.pc_continue);
 	pop_scope();
 
 	fixup_branch_fwd(l1_br_false);
+
+	ctx.pc_continue = save;
 }
 
 void parse_if() {
@@ -1387,13 +1393,22 @@ void parse_return() {
 
 void parse_break() {
 	// XXX break-to-labeled-loop support
-	require(tSEMI);
 	gen_branch_fwd();
 	Scope scope = find_scope(sLoop);
 	if (scope == nil) {
 		error("break must be used from inside a looping construct");
 	}
 	add_scope_fixup(scope);
+	require(tSEMI);
+}
+
+void parse_continue() {
+	// XXX continue-to-labeled-loop support
+	if (ctx.pc_continue == 0) {
+		error("continue must be used from inside a looping construct");
+	}
+	gen_branch_back(ctx.pc_continue);
+	require(tSEMI);
 }
 
 void STORE(u32 val, u32* ptr, u32 n, u32 sz) {
@@ -1575,6 +1590,9 @@ void parse_block() {
 		} else if (ctx.tok == tBREAK) {
 			next();
 			parse_break();
+		} else if (ctx.tok == tCONTINUE) {
+			next();
+			parse_continue();
 		} else if (ctx.tok == tWHILE) {
 			next();
 			parse_while();

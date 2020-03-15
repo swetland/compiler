@@ -2,6 +2,31 @@
 
 A place to jot down ideas and/or commentary about the work in progress.
 
+### 2020 Mar 15 - Non-optimal codegen
+
+1030-flow-control shows inefficient branch patterns around if-x-continue usage:
+
+```text
+000000ac: 88e00004  ldw r8, [sp, 4]
+000000b0: 48840001  and r8, r8, 1
+000000b4: 49000001  mov r9, 1
+000000b8: 08890009  sub r8, r8, r9
+000000bc: e9000002  bne 0xc8
+
+                if ((n & 1) == 1) {
+
+000000c0: e7fffff3  b 0x90
+
+                        continue;
+                }
+
+000000c4: e7000000  b 0xc8
+```
+
+This also gets me thinking that adopting the C convention that integer types
+are treated as bools (0 = false, othewise true) would be more efficent in a
+number of places,
+
 ### 2020 Mar 14 - More questionable codegen
 
 All of these from `demo/life.src`
