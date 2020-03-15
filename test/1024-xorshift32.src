@@ -1,0 +1,20 @@
+
+// todo: u32 and LSR support
+
+var state i32 = 0xd3f56332;
+
+func xorshift32() i32 {
+	state = state ^ (state << 13);
+	state = state ^ ((state >> 17) & 0x7FFF);
+	state = state ^ (state << 5);
+	return state;
+}
+
+func start() i32 {
+	var n i32 = 0;
+	while (n < 64) {
+		_hexout_(xorshift32());
+		n++;
+	}
+	return 64;
+}
