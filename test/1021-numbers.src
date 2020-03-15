@@ -1,0 +1,27 @@
+
+func start() i32 {
+	_hexout_(4294967295); // maxu32
+	_hexout_(2147483648); // highbit
+	_hexout_(0xffffffff); // maxu32
+	_hexout_(0x80000000); // highbit
+	_hexout_(0b11111111111111111111111111111111); // maxu32
+	_hexout_(0b10000000000000000000000000000000); // highbit
+        _hexout_(-1);
+	_hexout_(-2);
+	_hexout_(-2147483648); // minint32
+	_hexout_(2147483647); // maxint32
+	_hexout_(0b10001000101010101100110001010101);
+	_hexout_(2292894805);
+	_hexout_(0x88aacc55);
+	_hexout_('a'); // char consts
+	_hexout_('\t');
+	_hexout_('\n');
+	_hexout_('\r');
+	_hexout_('\\');
+	_hexout_('\'');
+	_hexout_('"');
+	_hexout_('\x42');
+	_hexout_('\xFF');
+	_hexout_('\x80');
+	return 0;
+}

@@ -70,17 +70,18 @@ char *tnames[] = {
 	"for", "switch", "case",
 	"true", "false", "nil",
 	"<ID>", "<NUM>", "<STR>",
+	"<SPC>", "<INV>", "<DQT>", "<SQT>", "<MSC>",
 };
 
 u8 lextab[256] = {
-	tINV, tINV, tINV, tINV, tINV, tINV, tINV, tINV,
+	tEOF, tINV, tINV, tINV, tINV, tINV, tINV, tINV,
 	tINV, tSPC, tEOL, tSPC, tINV, tSPC, tINV, tINV,
 	tINV, tINV, tINV, tINV, tINV, tINV, tINV, tINV,
 	tINV, tINV, tINV, tINV, tINV, tINV, tINV, tINV,
 	tSPC, tBANG, tDQT, tMSC, tMSC, tPERCENT, tAMP, tSQT,
 	tOPAREN, tCPAREN, tSTAR, tPLUS, tCOMMA, tMINUS, tDOT, tSLASH,
 	tNUM, tNUM, tNUM, tNUM, tNUM, tNUM, tNUM, tNUM,
-	tNUM, tNUM, tCOLON, tSEMI, tLT, tEQ, tGT, tMSC,
+	tNUM, tNUM, tCOLON, tSEMI, tLT, tASSIGN, tGT, tMSC,
 	tMSC, tIDN, tIDN, tIDN, tIDN, tIDN, tIDN, tIDN,
 	tIDN, tIDN, tIDN, tIDN, tIDN, tIDN, tIDN, tIDN,
 	tIDN, tIDN, tIDN, tIDN, tIDN, tIDN, tIDN, tIDN,
@@ -254,11 +255,14 @@ struct CtxRec {
 	const char* filename;  // filename of active source
 	u32 linenumber;        // line number of most recent line
 	u32 lineoffset;        // position of start of most recent line
+	u32 byteoffset;        // position of the most recent character
 	u32 flags;
+	u32 cc;                // scanner: next character
 
 	token_t tok;           // most recent token
-	u32 num;
-	char tmp[256];         // used for tIDN, tTYPE, tNUM, tSTR;
+	u32 num;               // used for tNUM
+	char tmp[256];         // used for tIDN, tSTR;
+	String ident;          // used for tIDN
 
 	String strtab;         // TODO: hashtable
 	Object typetab;        // TODO: hashtable
@@ -279,6 +283,23 @@ struct CtxRec {
 	Type type_int32;
 	Type type_nil;
 	Type type_string;
+
+	String idn_if;
+	String idn_for;
+	String idn_var;
+	String idn_nil;
+	String idn_case;
+	String idn_func;
+	String idn_else;
+	String idn_true;
+	String idn_type;
+	String idn_break;
+	String idn_while;
+	String idn_false;
+	String idn_switch;
+	String idn_struct;
+	String idn_return;
+	String idn_continue;
 
 	u32 code[8192];
 	u32 data[8192];
@@ -367,6 +388,7 @@ void fixup_branches_fwd(Fixup list);
 void fixup_branch_fwd(u32 addr);
 
 String make_string(const char* text, u32 len) {
+	// OPT obviously this wants to be a hash table
 	String str = ctx.strtab;
 	while (str != nil) {
 		if ((str->len == len) && (memcmp(text, str->text, len) == 0)) {
@@ -484,6 +506,25 @@ void init_ctx() {
 
 	make_builtin("_hexout_", biPrintHex32, ctx.type_int32, nil, ctx.type_void);
 	make_builtin("_putc_", biPutC, ctx.type_int32, nil, ctx.type_void);
+
+	// pre-intern keywords
+	ctx.idn_if       = make_string("if", 2);
+	ctx.idn_for      = make_string("for", 3);
+	ctx.idn_var      = make_string("var", 3);
+	ctx.idn_nil      = make_string("nil", 3);
+	ctx.idn_case     = make_string("case", 4);
+	ctx.idn_func     = make_string("func", 4);
+	ctx.idn_else     = make_string("else", 4);
+	ctx.idn_true     = make_string("true", 4);
+	ctx.idn_type     = make_string("type", 4);
+	ctx.idn_break    = make_string("break", 5);
+	ctx.idn_while    = make_string("while", 5);
+	ctx.idn_false    = make_string("false", 5);
+	ctx.idn_switch   = make_string("switch", 6);
+	ctx.idn_struct   = make_string("struct", 6);
+	ctx.idn_return   = make_string("return", 6);
+	ctx.idn_continue = make_string("continue", 8);
+
 }
 
 bool same_type(Type a, Type b) {
@@ -576,209 +617,228 @@ int unhex(u32 ch) {
 	}
 }
 
-token_t next_string(const char* s) {
-	u32 ch, len = 0;
-	while (true) {
-		switch ((ch = *s++)) {
-		case 0: error("unterminated string");
-		case '"': goto done;
-		case '\\':
-			switch ((ch = *s++)) {
-			case '0': error("unterminated string");
-			case 'n': ch = 10; break;
-			case 't': ch = 9; break;
-		  	case '"': ch = '"'; break;
-			case 'x': {
-				int x0 = unhex(s[0]);
-				int x1 = unhex(s[1]);
-				//TODO: if error() is ever non-fatal, this may leave
-				//sptr past end of input
-				if ((x0 < 0) || (x1 < 0)) error("invalid hex escape");
-				ch = (x0 << 4) | x1;
-				s += 2;
-				break;
-			}
-			default: error("invalid string escape 0x%02x", ch);
-			}
-			break;
-		default:
-			break;
-		}
-		if (len == 255) error("string constant too long");
-		ctx.tmp[len++] = ch;
+u32 scan() {
+	if (*ctx.sptr == 0) {
+		ctx.cc = 0;
+	} else {
+		ctx.byteoffset++;
+		ctx.cc = *ctx.sptr++;
 	}
-done:
-	ctx.tmp[len] = 0;
-	ctx.sptr = s;
+	return ctx.cc;
+}
+
+u32 unescape(u32 n) {
+	if (n == 'n') {
+		return 10;
+	} else if (n == 'r') {
+		return 13;
+	} else if (n == 't') {
+		return 9;
+	} else if (n == '"') {
+		return '"';
+	} else if (n == '\'') {
+		return '\'';
+	} else if (n == '\\') {
+		return '\\';
+	} else if (n == 'x') {
+		int x0 = unhex(scan());
+		int x1 = unhex(scan());
+		if ((x0 < 0) || (x1 < 0)) {
+			error("invalid hex escape");
+		}
+		return (x0 << 4) | x1;
+	} else {
+		error("invalid escape 0x%02x", n);
+		return 0;
+	}
+}
+
+token_t scan_string(u32 cc, u32 nc) {
+	u32 n = 0;
+	while (true) {
+		if (nc == '"') {
+			break;
+		} else if (nc == 0) {
+			error("unterminated string");
+		} else if (nc == '\\') {
+			ctx.tmp[n] = unescape(scan());
+		} else {
+			ctx.tmp[n] = nc;
+		}
+		nc = scan();
+		n++;
+		if (n == 255) {
+			error("constant string too large");
+		}
+	}
+	ctx.tmp[n] = 0;
 	return tSTR;
 }
 
-token_t next_num(u32 n, const char* str, size_t len) {
-	if (len > 255) error("number too large");
-	memcpy(ctx.tmp, str, len);
+token_t scan_keyword(u32 len) {
 	ctx.tmp[len] = 0;
-	ctx.num = n;
-	ctx.sptr += len;
-	return ctx.tok = tNUM;
-}
+	String idn = make_string(ctx.tmp, len);
+	ctx.ident = idn;
 
-int streq(const char* s1, u32 l1, const char* s2, u32 l2) {
-	return (l1 == l2) && (!memcmp(s1, s2, l1));
-}
-
-token_t next_word(const char* str, size_t len) {
-	if (len > 255) error("word too large");
-	memcpy(ctx.tmp, str, len);
-	ctx.tmp[len] = 0;
-	ctx.num = 0;
-	ctx.sptr += len;
-	switch (len) {
-	case 2:
-		if (streq(str, len, "if", 2)) return ctx.tok = tIF;
-		break;
-	case 3:
-		if (streq(str, len, "for", 3)) return ctx.tok = tFOR;
-		if (streq(str, len, "var", 3)) return ctx.tok = tVAR;
-		if (streq(str, len, "nil", 3)) return ctx.tok = tNIL;
-		break;
-	case 4:
-		if (streq(str, len, "case", 4)) return ctx.tok = tCASE;
-		if (streq(str, len, "func", 4)) return ctx.tok = tFUNC;
-		if (streq(str, len, "else", 4)) return ctx.tok = tELSE;
-		if (streq(str, len, "true", 4)) return ctx.tok = tTRUE;
-		if (streq(str, len, "type", 4)) return ctx.tok = tTYPE;
-		break;
-	case 5:
-		if (streq(str, len, "break", 5)) return ctx.tok = tBREAK;
-		if (streq(str, len, "while", 5)) return ctx.tok = tWHILE;
-		if (streq(str, len, "false", 5)) return ctx.tok = tFALSE;
-		break;
-	case 6:
-		if (streq(str, len, "switch", 6)) return ctx.tok = tSWITCH;
-		if (streq(str, len, "struct", 6)) return ctx.tok = tSTRUCT;
-		if (streq(str, len, "return", 6)) return ctx.tok = tRETURN;
-		break;
-	case 8:
-		if (streq(str, len, "continue", 8)) return ctx.tok = tCONTINUE;
-		break;
+	if (len == 2) {
+		if (idn == ctx.idn_if) { return tIF; };
+	} else if (len == 3) {
+		if (idn == ctx.idn_for) { return tFOR; }
+		if (idn == ctx.idn_var) { return tVAR; }
+		if (idn == ctx.idn_nil) { return tNIL; }
+	} else if (len == 4) {
+		if (idn == ctx.idn_case) { return tCASE; }
+		if (idn == ctx.idn_func) { return tFUNC; }
+		if (idn == ctx.idn_else) { return tELSE; }
+		if (idn == ctx.idn_true) { return tTRUE; }
+		if (idn == ctx.idn_type) { return tTYPE; }
+	} else if (len == 5) {
+		if (idn == ctx.idn_break) { return tBREAK; }
+		if (idn == ctx.idn_while) { return tWHILE; }
+		if (idn == ctx.idn_false) { return tFALSE; }
+	} else if (len == 6) {
+		if (idn == ctx.idn_switch) { return tSWITCH; }
+		if (idn == ctx.idn_struct) { return tSTRUCT; }
+		if (idn == ctx.idn_return) { return tRETURN; }
+	} else if (len == 8) {
+		if (idn == ctx.idn_continue) { return tCONTINUE; }
 	}
-	return ctx.tok = tIDN;
+	return tIDN;
 }
 
-#define TOKEN(t) { ctx.sptr++; return ctx.tok = t; }
-#define TOKEN2(t) { ctx.sptr+=2; return ctx.tok = t; }
+token_t scan_number(u32 cc, u32 nc) {
+	u32 n = 1;
+	u32 val = cc - '0';
+
+	if ((cc == '0') && (nc == 'b')) { // binary
+		nc = scan();
+		while ((nc == '0') || (nc == '1')) {
+			val = (val << 1) | (nc - '0');
+			nc = scan();
+			n++;
+			if (n == 34) {
+				error("binary constant too large");
+			}
+		}
+	} else if ((cc == '0') && (nc == 'x')) { // hex
+		nc = scan();
+		while (true) {
+			int tmp = unhex(nc);
+			if (tmp == -1) {
+				break;
+			}
+			val = (val << 4) | tmp;
+			nc = scan();
+			n++;
+			if (n == 10) {
+				error("hex constant too large");
+			}
+		}
+	} else { // decimal
+		while (lextab[nc] == tNUM) {
+			u32 tmp = (val * 10) + (nc - '0');
+			if (tmp <= val) {
+				error("decimal constant too large");
+			}
+			val = tmp;
+			nc = scan();
+			n++;
+		}
+	}
+	ctx.num = val;
+	return tNUM;
+}
+
+token_t scan_ident(u32 cc, u32 nc) {
+	ctx.tmp[0] = cc;
+	u32 n = 1;
+
+	while (true) {
+		u32 tok = lextab[nc];
+		if ((tok == tIDN) || (tok == tNUM)) {
+			ctx.tmp[n] = nc;
+			n++;
+			if (n == 32) { error("identifier too large"); }
+			nc = scan();
+		} else {
+			break;
+		}
+	}
+	return scan_keyword(n);
+}
 
 token_t _next() {
+	u8 nc = ctx.cc;
 	while (true) {
-		const char* s = ctx.sptr;
-
-		switch (*s) {
-		case 0:
-			return ctx.tok = tEOF;
-		case '\n':
-			ctx.linenumber++;
-			ctx.sptr++;
-			ctx.lineoffset = ctx.sptr - ctx.source;
-			ctx.xref[ctx.pc / 4] = ctx.linenumber;
-			if (ctx.flags & cfVisibleEOL) return ctx.tok = tEOL;
-			continue;
-		case ' ':
-		case '\t':
-		case '\r':
-			ctx.sptr++;
-			continue;
-		case '0':
-			if (s[1] == 'x') {
-				u32 n = 0;
-				s++;
-				for (;;) {
-					s++;
-					int x = unhex(*s);
-					if (x < 0) return next_num(n, ctx.sptr, s - ctx.sptr);
-					n = (n << 4) | x;
+		u8 cc = nc;
+		nc = scan();
+		u32 tok = lextab[cc];
+		if (tok == tNUM) { // 0..9
+			return scan_number(cc, nc);
+		} else if (tok == tIDN) { // _ A..Z a..z
+			return scan_ident(cc, nc);
+		} else if (tok == tDQT) { // "
+			return scan_string(cc, nc);
+		} else if (tok == tSQT) { // '
+			ctx.num = nc;
+			if (nc == '\\') {
+				ctx.num = unescape(scan());
+			}
+			nc = scan();
+			if (nc != '\'') {
+				error("unterminated character constant");
+			}
+			nc = scan();
+			return tNUM;
+		} else if (tok == tPLUS) {
+			if (nc == '+') { tok = tINC; nc = scan(); }
+		} else if (tok == tMINUS) {
+			if (nc == '-') { tok = tDEC; nc = scan(); }
+		} else if (tok == tAMP) {
+			if (nc == '&') { tok = tAND; nc = scan(); }
+			else if (nc == '~') { tok = tANDNOT; nc = scan(); }
+		} else if (tok == tPIPE) {
+			if (nc == '|') { tok = tOR; nc = scan(); }
+		} else if (tok == tGT) {
+			if (nc == '=') { tok = tGE; nc = scan(); }
+			else if (nc == '>') { tok = tRIGHT; nc = scan(); }
+		} else if (tok == tLT) {
+			if (nc == '=') { tok = tLE; nc = scan(); }
+			else if (nc == '<') { tok = tLEFT; nc = scan(); }
+		} else if (tok == tASSIGN) {
+			if (nc == '=') { tok = tEQ; nc = scan(); }
+		} else if (tok == tBANG) {
+			if (nc == '=') { tok = tNE; nc = scan(); }
+		} else if (tok == tSLASH) {
+			if (nc == '/') {
+				// comment -- consume until EOL or EOF
+				while ((nc != '\n') && (nc != 0)) {
+					nc = scan();
 				}
-			}
-			if (s[1] == 'b') {
-				u32 n = 0;
-				s += 2;
-				while ((*s == '1') || (*s == '0')) {
-					n = (n << 1) | (*s - '0');
-					s++;
-				}
-				return next_num(n, ctx.sptr, s - ctx.sptr);
-			}
-		case '1' ... '9': {
-			u32 n = 0;
-			for (;;) {
-				switch (*s) {
-				case '0' ... '9':
-					n = (n * 10) + (*s - '0');
-					break;
-				default:
-					return next_num(n, ctx.sptr, s - ctx.sptr);
-				}
-				s++;
-			}
-			}
-		case 'a' ... 'z':
-		case 'A' ... 'Z':
-		case '_':
-			for (;;) {
-				s++;
-				switch (*s) {
-				case '0' ... '9':
-				case 'a' ... 'z':
-				case 'A' ... 'Z':
-				case '_':
-					break;
-				default:
-					return next_word(ctx.sptr, s - ctx.sptr);
-				}
-			}
-		case '.': TOKEN(tDOT);
-		case ',': TOKEN(tCOMMA);
-		case ':': TOKEN(tCOLON);
-		case ';': TOKEN(tSEMI);
-		case '[': TOKEN(tOBRACK);
-		case ']': TOKEN(tCBRACK);
-		case '{': TOKEN(tOBRACE);
-		case '}': TOKEN(tCBRACE);
-		case '(': TOKEN(tOPAREN);
-		case ')': TOKEN(tCPAREN);
-		case '+': if (s[1] == '+') TOKEN2(tINC) else TOKEN(tPLUS);
-		case '-': if (s[1] == '-') TOKEN2(tDEC) else TOKEN(tMINUS);
-		case '*': TOKEN(tSTAR);
-		case '%': TOKEN(tPERCENT);
-		case '^': TOKEN(tCARET);
-		case '~': TOKEN(tNOT);
-		case '=': if (s[1] == '=') TOKEN2(tEQ) else TOKEN(tASSIGN);
-		case '&':
-			if (s[1] == '&') TOKEN2(tAND)
-			if (s[1] == '~') TOKEN2(tANDNOT)
-			else TOKEN(tAMP);
-		case '|': if (s[1] == '|') TOKEN2(tOR) else TOKEN(tPIPE);
-		case '>':
-			if (s[1] == '=') TOKEN2(tGE)
-			else if(s[1] == '>') TOKEN2(tRIGHT)
-			else TOKEN(tGT);
-		case '<':
-			if (s[1] == '=') TOKEN2(tLE)
-			else if (s[1] == '<') TOKEN2(tLEFT)
-			else TOKEN(tLT);
-		case '!': if (s[1] == '=') TOKEN2(tNE) else TOKEN(tBANG);
-		case '/':
-			if (s[1] == '/') {
-				while ((*s != '\n') && (*s != 0)) s++;
-				ctx.sptr = s;
 				continue;
-			} else {
-				TOKEN(tSLASH);
 			}
-		case '"': return next_string(ctx.sptr + 1);
-		default:
-			error("unknown character '%c' (0x%02x)\n",
-			      ((*s > ' ') && (*s < 128)) ? *s : '.', *s);
+		} else if (tok == tEOL) {
+			ctx.linenumber++;
+			ctx.lineoffset = ctx.byteoffset;
+			ctx.xref[ctx.pc / 4] = ctx.linenumber;
+			if (ctx.flags & cfVisibleEOL) {
+				return tEOL;
+			}
+			continue;
+		} else if (tok == tSPC) {
+			continue;
+		} else if ((tok == tMSC) || (tok == tINV)) {
+			error("unknown character 0x%02x", cc);
 		}
+
+		// if we're an AddOp or MulOp, folled by an =
+		if (((tok & 0xF0) == 0x20) && (nc == '=')) {
+			nc = scan();
+			// transform us to a XEQ operation
+			tok = tok + 0x10;
+		}
+
+		return tok;
 	}
 }
 
@@ -926,7 +986,7 @@ String parse_name(const char* what) {
 	if (ctx.tok != tIDN) {
 		error("expected %s, found %s", what, tnames[ctx.tok]);
 	}
-	String str = make_string(ctx.tmp, strlen(ctx.tmp));
+	String str = ctx.ident;
 	next();
 	return str;
 }
@@ -948,7 +1008,7 @@ void parse_operand(Item x) {
 		require(tCPAREN);
 		return;
 	} else if (ctx.tok == tIDN) {
-		String str = make_string(ctx.tmp, strlen(ctx.tmp));
+		String str = ctx.ident;
 		Object obj = find(str);
 		if (obj == nil) {
 			error("unknown identifier '%s'", str->text);
@@ -1211,7 +1271,7 @@ Type parse_type(bool fwd_ref_ok) {
 		next();
 		return parse_struct_type();
 	} else if (ctx.tok == tIDN) {
-		String name = make_string(ctx.tmp, strlen(ctx.tmp));
+		String name = ctx.ident;
 		next();
 		Type type = find_type(name);
 		if (type == nil) {
@@ -2589,6 +2649,7 @@ int main(int argc, char **argv) {
 	const char *lstname = nil;
 	const char *srcname = nil;
 	bool dump = false;
+	bool scan_only = false;
 
 	init_ctx();
 	ctx.filename = "<commandline>";
@@ -2612,6 +2673,8 @@ int main(int argc, char **argv) {
 			dump = true;
 		} else if (!strcmp(argv[1], "-v")) {
 			TRACE_CODEGEN = true;
+		} else if (!strcmp(argv[1], "-s")) {
+			scan_only = true;
 		} else if (!strcmp(argv[1], "-A")) {
 			ctx.flags |= cfAbortOnError;
 		} else if (argv[1][0] == '-') {
@@ -2635,15 +2698,20 @@ int main(int argc, char **argv) {
 	load(srcname);
 	ctx.linenumber = 1;
 	ctx.lineoffset = 0;
+	// prime the lexer
+	scan();
 
-#if 0
-	ctx.flags |= 1;
-	do {
-		next();
-		print();
-	} while (ctx.tok != tEOF);
-	printf("\n");
-#else
+	if (scan_only) {
+		ctx.flags |= 1;
+		while (true) {
+			next();
+			print();
+			if (ctx.tok == tEOF) {
+				return 0;
+			}
+		}
+	}
+
 	gen_start();
 	parse_program();
 	gen_end();
@@ -2654,7 +2722,6 @@ int main(int argc, char **argv) {
 	if (dump) {
 		dump_context();
 	}
-#endif
 
 	return 0;
 }
