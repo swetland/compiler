@@ -1,6 +1,6 @@
 
-var blargh [256]byte;
+var blarg [256]byte;
 
 func bad() {
-	var n = blarg[256];
+	var n i32 = blarg[256];
 }
