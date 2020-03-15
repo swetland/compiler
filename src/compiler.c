@@ -375,6 +375,11 @@ void gen_call(Item func);
 // returns address to fixup
 u32 gen_branch_cond(Item x, bool sense);
 
+// used by && and || on opposing code flows
+// bool1 version loads val, bool2 version loads !val
+void gen_load_bool1(Item x, bool val);
+void gen_load_bool2(Item x);
+
 // generate a backward branch to addr
 void gen_branch_back(u32 addr);
 
@@ -1173,21 +1178,63 @@ void parse_rel_expr(Item x) {
 
 void parse_and_expr(Item x) {
 	parse_rel_expr(x);
-	while (ctx.tok == tAND) {
-		next();
-		ItemRec y;
-		parse_rel_expr(&y);
-		error("<TODO> and op");
+	if (ctx.tok == tAND) {
+		Scope outer = push_scope(sBlock, nil);
+
+		// if !x goto nope
+		gen_branch_cond(x, false);
+		add_scope_fixup(outer);
+
+		while (ctx.tok == tAND) {
+			next();
+			ItemRec y;
+
+			// if !y goto nope
+			parse_rel_expr(&y);
+			gen_branch_cond(&y, false);
+			add_scope_fixup(outer);
+		}
+		// res = true, goto done
+		gen_load_bool1(x, true);
+		u32 l0_true = gen_branch_fwd();
+
+		// nope: res = false
+		pop_scope();
+		gen_load_bool2(x);
+
+		// done:
+		fixup_branch_fwd(l0_true);
 	}
 }
 
 void parse_expr(Item x) {
 	parse_and_expr(x);
-	while (ctx.tok == tOR) {
-		next();
-		ItemRec y;
-		parse_and_expr(&y);
-		error("<TODO> or op");
+	if (ctx.tok == tOR) {
+		Scope outer = push_scope(sBlock, nil);
+
+		// if x goto yup
+		gen_branch_cond(x, true);
+		add_scope_fixup(outer);
+
+		while (ctx.tok == tOR) {
+			next();
+			ItemRec y;
+
+			// if y goto yup
+			parse_rel_expr(&y);
+			gen_branch_cond(&y, true);
+			add_scope_fixup(outer);
+		}
+		// res = false, goto done
+		gen_load_bool1(x, false);
+		u32 l0_false = gen_branch_fwd();
+
+		// yup: res = true
+		pop_scope();
+		gen_load_bool2(x);
+
+		// done:
+		fixup_branch_fwd(l0_false);
 	}
 }
 
@@ -1512,6 +1559,7 @@ void parse_global_var() {
 	gvar->next = ctx.scope->first;
 	ctx.scope->first = gvar;
 	ctx.alloc_global = ctx.alloc_global + type->size;
+	ctx.alloc_global = (ctx.alloc_global + 3) & (~3); // round to word
 
 	if (ctx.tok == tASSIGN) {
 		next();
@@ -2108,6 +2156,17 @@ void gen_get_ptr(Item x) {
 	// TODO: can we cache these or be sure to recycle them later?
 	x->type = make_type(tPointer, x->type, nil, nil, 0, 4);
 	gen_trace("get_ptr<<<", x, nil);
+}
+
+void gen_load_bool1(Item x, bool val) {
+	set_item(x, iReg, ctx.type_bool, get_reg_tmp(), val, 0);
+	gen_trace("load_bool1", x, nil);
+	emit_opi(MOV, x->r, 0, x->a);
+}
+
+void gen_load_bool2(Item x) {
+	gen_trace("load_bool2", x, nil);
+	emit_opi(MOV, x->r, 0, !x->a);
 }
 
 u32 gen_branch_cond(Item x, bool sense) {

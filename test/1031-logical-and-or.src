@@ -1,0 +1,31 @@
+
+
+func or_test(n i32) {
+	if (n == 3 || n == 6 || n == 9) {
+		_hexout_(n | 0x100);
+	} else {
+		_hexout_(n | 0x200);
+	}
+}
+
+func and_test(n i32) {
+	if ((n & 1 == 1) && (n & 2 == 2) && (n < 8)) {
+		_hexout_(n | 0x300);
+	} else {
+		_hexout_(n | 0x400);
+	}
+}
+
+func start() i32 {
+	var n i32 = 0;
+	while n < 10 {
+		or_test(n);
+		n = n + 1;
+	}
+	n = 0;
+	while n < 16 {
+		and_test(n);
+		n = n + 1;
+	}
+	return 0x42;
+}
