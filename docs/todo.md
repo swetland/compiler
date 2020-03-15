@@ -3,7 +3,6 @@
 ### Compiler
 
 - [ ] support for slices & string constants
-- [ ] support for globals, init'ing gp
 - [ ] support for enums, or convert enums to consts
 - [ ] continue
 - [ ] break/continue to label
@@ -11,6 +10,7 @@
 - [ ] type inference for var definitions
 - [x] support for arrays
 - [x] support for pointers
+- [x] support for globals, init'ing gp
 - [x] support for structs
 - [x] type definition
 - [x] finish if/while flow control

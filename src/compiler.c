@@ -251,9 +251,9 @@ void print_item(Item x);
 struct CtxRec {
 	const char* source;    // entire source file
 	const char* sptr;      // tokenizer source pointer
-	const char* line;      // start of most recent line
 	const char* filename;  // filename of active source
 	u32 linenumber;        // line number of most recent line
+	u32 lineoffset;        // position of start of most recent line
 	u32 flags;
 
 	token_t tok;           // most recent token
@@ -481,7 +481,6 @@ void init_ctx() {
 	ctx.type_string->base = ctx.type_byte;
 
 	ctx.scope = &(ctx.global);
-	ctx.line = "";
 
 	make_builtin("_hexout_", biPrintHex32, ctx.type_int32, nil, ctx.type_void);
 	make_builtin("_putc_", biPutC, ctx.type_int32, nil, ctx.type_void);
@@ -522,23 +521,21 @@ bool compatible_type(Type dst, Type src) {
 	return same_type(dst, src);
 }
 
+void dump_file_line(const char* fn, u32 offset);
+
 void error(const char *fmt, ...) {
 	va_list ap;
-
-	u32 len = 0;
-	const char *s = ctx.line;
-	while (len < 255) {
-		if ((*s < ' ') && (*s != 9)) break;
-		s++;
-		len++;
-	}
 
 	fprintf(stderr,"%s:%d: ", ctx.filename, ctx.linenumber);
 	va_start(ap, fmt);
 	vfprintf(stderr, fmt, ap);
 	va_end(ap);
-	
-	fprintf(stderr,"\n%.*s\n", len, ctx.line);
+
+	if (ctx.linenumber > 0) {
+		dump_file_line(ctx.filename, ctx.lineoffset);
+	}
+	fprintf(stderr, "\n");
+
 	if (ctx.flags & cfAbortOnError) {
 		abort();
 	} else {
@@ -681,7 +678,7 @@ token_t _next() {
 		case '\n':
 			ctx.linenumber++;
 			ctx.sptr++;
-			ctx.line = ctx.sptr;
+			ctx.lineoffset = ctx.sptr - ctx.source;
 			ctx.xref[ctx.pc / 4] = ctx.linenumber;
 			if (ctx.flags & cfVisibleEOL) return ctx.tok = tEOL;
 			continue;
@@ -2466,6 +2463,32 @@ void gen_listing(const char* listfn, const char* srcfn) {
 // ================================================================
 
 
+void dump_file_line(const char* fn, u32 offset) {
+	int fd = open(fn, O_RDONLY);
+	if (fd < 0) {
+		return;
+	}
+	if (lseek(fd, offset, SEEK_SET) != offset) {
+		close(fd);
+		return;
+	}
+	char line[256];
+	int r = read(fd, line, 255);
+	if (r > 0) {
+		line[r] = 0;
+		int n = 0;
+		while (n < r) {
+			if (line[n] == '\n') {
+				line[n] = 0;
+				break;
+			}
+			n++;
+		}
+		fprintf(stderr, "\n%s", line);
+	}
+	close(fd);
+}
+
 void dump_type(Type type, bool use_short_name) {
 	if (use_short_name && (type->obj != nil)) {
 		printf("%s", type->obj->name->text);
@@ -2610,8 +2633,8 @@ int main(int argc, char **argv) {
 	ctx.filename = srcname;
 
 	load(srcname);
-	ctx.line = ctx.sptr;
 	ctx.linenumber = 1;
+	ctx.lineoffset = 0;
 
 #if 0
 	ctx.flags |= 1;
