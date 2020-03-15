@@ -609,12 +609,16 @@ void load(const char* filename) {
 }
 
 int unhex(u32 ch) {
-	switch (ch) {
-	case '0' ... '9': return ch - '0';
-	case 'a' ... 'f': return ch - 'a' + 10;
-	case 'A' ... 'F': return ch - 'A' + 10;
-	default: return -1;
+	if ((ch >= '0') && (ch <= '9')) {
+		return ch - '0';
 	}
+	if ((ch >= 'a') && (ch <= 'f')) {
+		return ch - 'a' + 10;
+	}
+	if ((ch >= 'A') && (ch <= 'F')) {
+		return ch - 'A' + 10;
+	}
+	return -1;
 }
 
 u32 scan() {
@@ -831,7 +835,7 @@ token_t _next() {
 			error("unknown character 0x%02x", cc);
 		}
 
-		// if we're an AddOp or MulOp, folled by an =
+		// if we're an AddOp or MulOp, followed by an '='
 		if (((tok & 0xF0) == 0x20) && (nc == '=')) {
 			nc = scan();
 			// transform us to a XEQ operation
@@ -846,34 +850,36 @@ token_t next() {
 	return (ctx.tok = _next());
 }
 
-void printstr(const char* s) {
-	u32 ch;
+void printstr() {
+	u32 n = 0;
 	printf("\"");
-	while ((ch = *s++) != 0) {
-		if ((ch < ' ') || (ch > '~')) {
-			switch (ch) {
-			case 9: printf("\\t"); break;
-			case 10: printf("\\n"); break;
-			default: printf("\\x%02x", ch); break;
-			}
+	while (n < 256) {
+		u32 ch = ctx.tmp[n];
+		if (ch == 0) {
+			break;
+		} else if ((ch < ' ') || (ch > '~')) {
+			printf("\\x%02x", ch);
+		} else if ((ch == '"') || (ch == '\\')) {
+			printf("\\%c", ch);
 		} else {
-			switch (ch) {
-			case '"': printf("\\\""); break;
-			case '\\': printf("\\\\"); break;
-			default: printf("%c", ch); break;
-			}
+			printf("%c", ch);
 		}
+		n++;
 	}
 	printf("\"");
 }
 
 void print() {
-	switch (ctx.tok) {
-	case tNUM: printf("#%u ", ctx.num); break;
-	case tIDN: printf("@%s ", ctx.tmp); break;
-	case tEOL: printf("\n"); break;
-	case tSTR: printstr(ctx.tmp); break;
-	default:   printf("%s ", tnames[ctx.tok]); break;
+	if (ctx.tok == tNUM) {
+		printf("#%u ", ctx.num);
+	} else if (ctx.tok == tIDN) {
+		printf("@%s ", ctx.tmp);
+	} else if (ctx.tok == tEOL) {
+		printf("\n");
+	} else if (ctx.tok == tSTR) {
+		printstr();
+	} else {
+		printf("%s ", tnames[ctx.tok]);
 	}
 }
 
@@ -1747,23 +1753,19 @@ void parse_type_def() {
 void parse_program() {
 	next();
 	for (;;) {
-		switch (ctx.tok) {
-		case tFUNC:
+		if (ctx.tok == tFUNC) {
 			next();
 			parse_function();
-			break;
-		case tTYPE:
+		} else if (ctx.tok == tTYPE) {
 			next();
 			parse_type_def();
-			break;
-		case tVAR:
+		} else if (ctx.tok == tVAR) {
 			next();
 			parse_global_var();
-			break;
-		case tEOF:
+		} else if (ctx.tok == tEOF) {
 			return;
-		default:
-			expected("func or var");
+		} else {
+			expected("function, variable, or type definition");
 		}
 	}
 }
