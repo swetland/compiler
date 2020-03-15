@@ -370,6 +370,8 @@ void gen_ref_param(u32 n, Item val);
 // call func, consumes parameters and func
 void gen_call(Item func);
 
+void gen_bool_from_comp(Item x);
+
 // generate a forward conditional branch
 // consumes x which must be Bool or Cond
 // returns address to fixup
@@ -561,9 +563,14 @@ bool same_type(Type a, Type b) {
 }
 
 // for assignments, etc
-bool compatible_type(Type dst, Type src) {
+bool compatible_type(Type dst, Type src, Item x) {
+	if (x->kind == iComp) {
+		// collapse comparisons into bools for storage
+		gen_bool_from_comp(x);
+		src = ctx.type_bool;
+	}
 	if (dst->kind == tInt32) {
-		if (src->kind == tByte) {
+		if ((src->kind == tByte) || (src->kind == tBool)) {
 			return true;
 		}
 	}
@@ -1028,6 +1035,8 @@ void parse_operand(Item x) {
 			error("unknown identifier '%s'", str->text);
 		}
 		gen_item_from_obj(x, obj);
+	} else {
+		error("invalid expression");
 	}
 	next();
 }
@@ -1065,12 +1074,15 @@ void parse_primary_expr(Item x) {
 			u32 n = 0;
 			Object param = x->type->first;
 			while (param != nil) {
+				if (ctx.tok == tCPAREN) {
+					error("too few parameters for %s()", x->type->obj->name->text);
+				}
 				if (n != 0) {
 					require(tCOMMA);
 				}
 				ItemRec y;
 				parse_expr(&y);
-				if (!compatible_type(param->type, y.type)) {
+				if (!compatible_type(param->type, y.type, &y)) {
 					error("incompatible type for parameter '%s'\n", param->name->text);
 				}
 				if (param->type->kind == tArray) {
@@ -1221,7 +1233,7 @@ void parse_expr(Item x) {
 			ItemRec y;
 
 			// if y goto yup
-			parse_rel_expr(&y);
+			parse_and_expr(&y);
 			gen_branch_cond(&y, true);
 			add_scope_fixup(outer);
 		}
@@ -1430,7 +1442,7 @@ void parse_return() {
 		x.type = ctx.type_void;
 	} else {
 		parse_expr(&x);
-		if (!compatible_type(ctx.fn->type->base, x.type)) {
+		if (!compatible_type(ctx.fn->type->base, x.type, &x)) {
 			error("return types do not match");
 		}
 		require(tSEMI);
@@ -1593,6 +1605,9 @@ void parse_expr_statement() {
 		next();
 		ItemRec y;
 		parse_expr(&y);
+		if (!compatible_type(x.type, y.type, &x)) {
+			error("incompatible type in assignment");
+		}
 		gen_store(&y, &x);
 	} else if ((ctx.tok & tcMASK) == tcAEQOP) {
 		u32 op = ctx.tok - tADDEQ;
@@ -2169,6 +2184,25 @@ void gen_load_bool2(Item x) {
 	emit_opi(MOV, x->r, 0, !x->a);
 }
 
+void gen_bool_from_comp(Item x) {
+	gen_trace("bool_from_cond", x, nil);
+	emit_op(SUB, x->a, x->a, x->b);
+	put_reg(x->b);
+	u32 l0_br_to_true = ctx.pc;
+	emit_bi(rel_op_to_cc(x->r), 0);
+	emit_opi(MOV, x->a, 0, 0);
+	u32 l1_br_to_done = ctx.pc;
+	emit_bi(AL, 0);
+	fixup_branch_fwd(l0_br_to_true);
+	emit_opi(MOV, x->a, 0, 1);
+	fixup_branch_fwd(l1_br_to_done);
+	x->kind = iReg;
+	x->type = ctx.type_bool;
+	x->r = x->a;
+	x->a = 0;
+	x->b = 0;
+}
+
 u32 gen_branch_cond(Item x, bool sense) {
 	gen_trace_n("branch_cond", sense, x, nil);
 	u32 cc;
@@ -2389,6 +2423,7 @@ void gen_rel_op(u32 op, Item x, Item y) {
 
 	// fuse x and y items into the new Comparison Item x
 	x->kind = iComp;
+	x->type = ctx.type_bool;
 	x->a = x->r;
 	x->b = y->r;
 	x->r = op;

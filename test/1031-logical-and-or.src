@@ -1,4 +1,24 @@
 
+func is_three(n i32) bool {
+	_hexout_(0x333);
+	return n == 3;
+}
+func is_six(n i32) bool {
+	_hexout_(0x666);
+	return n == 6;
+}
+func is_nine(n i32) bool {
+	_hexout_(0x999);
+	return n == 9;
+}
+
+func or_test2(n i32) {
+	if (is_three(n) || is_six(n) || is_nine(n)) {
+		_hexout_(n | 0x1100);
+	} else {
+		_hexout_(n | 0x2200);
+	}
+}
 
 func or_test(n i32) {
 	if (n == 3 || n == 6 || n == 9) {
@@ -7,7 +27,6 @@ func or_test(n i32) {
 		_hexout_(n | 0x200);
 	}
 }
-
 func and_test(n i32) {
 	if ((n & 1 == 1) && (n & 2 == 2) && (n < 8)) {
 		_hexout_(n | 0x300);
@@ -23,9 +42,15 @@ func start() i32 {
 		n = n + 1;
 	}
 	n = 0;
+	while n < 10 {
+		or_test2(n);
+		n = n + 1;
+	}
+	n = 0;
 	while n < 16 {
 		and_test(n);
 		n = n + 1;
 	}
 	return 0x42;
 }
+
