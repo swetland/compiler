@@ -250,9 +250,13 @@ void print_item(Item x);
 // ------------------------------------------------------------------
 
 struct CtxRec {
-	const char* source;    // entire source file
-	const char* sptr;      // tokenizer source pointer
 	const char* filename;  // filename of active source
+	int fd;
+
+	u8 iobuffer[1024];     // scanner file io buffer
+	u32 ionext;
+	u32 iolast;
+
 	u32 linenumber;        // line number of most recent line
 	u32 lineoffset;        // position of start of most recent line
 	u32 byteoffset;        // position of the most recent character
@@ -603,24 +607,18 @@ void load(const char* filename) {
 	ctx.filename = filename;
 	ctx.linenumber = 0;
 
-	int fd;
-	struct stat s;
-	char* data;
-
-	if ((fd = open(filename, O_RDONLY)) < 0)
-		error("cannot open file");
-	if (fstat(fd, &s) < 0)
-		error("cannot stat file");
-	if ((data = malloc(s.st_size + 1)) == NULL)
-		error("cannot allocate memory");
-	if (read(fd, data, s.st_size) != s.st_size)
-		error("cannot read file");
-	close(fd);
-	data[s.st_size] = 0;
-
-	ctx.source = data;
-	ctx.sptr = data;
+	if (ctx.fd >= 0) {
+		close(ctx.fd);
+	}
+	ctx.fd = open(filename, O_RDONLY);
+	if (ctx.fd < 0) {
+		error("cannot open file '%s'", filename);
+	}
+	ctx.ionext = 0;
+	ctx.iolast = 0;
 	ctx.linenumber = 1;
+	ctx.lineoffset = 0;
+	ctx.byteoffset = 0;
 }
 
 int unhex(u32 ch) {
@@ -637,12 +635,21 @@ int unhex(u32 ch) {
 }
 
 u32 scan() {
-	if (*ctx.sptr == 0) {
-		ctx.cc = 0;
-	} else {
-		ctx.byteoffset++;
-		ctx.cc = *ctx.sptr++;
+	while (ctx.ionext == ctx.iolast) {
+		if (ctx.fd < 0) {
+			ctx.cc = 0;
+			return ctx.cc;
+		}
+		int r = read(ctx.fd, ctx.iobuffer, sizeof(ctx.iobuffer));
+		if (r <= 0) {
+			ctx.fd = -1;
+		} else {
+			ctx.iolast = r;
+			ctx.ionext = 0;
+		}
 	}
+	ctx.cc = ctx.iobuffer[ctx.ionext];
+	ctx.ionext++;
 	return ctx.cc;
 }
 
