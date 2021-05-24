@@ -24,8 +24,10 @@
 
 ### Self-Hosting Cleanup
 
+- [ ] printf?
+- [ ] punch though stdio, etc
 - [ ] abandon all-source-in-ram approach
-- [ ] eliminate #defines
+- [x] eliminate #defines
 - [x] rewrite lexer to use if/else instead of case
 - [x] table driven lexing
 

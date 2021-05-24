@@ -15,18 +15,18 @@
 
 #include "risc5.h"
 
-#define FNMAXARGS 8
-
 #define nil 0
 
 typedef uint32_t u32;
 typedef int32_t i32;
 typedef uint8_t u8;
 
+enum { FNMAXARGS = 8, };
+
 // token classes (tok & tcMASK)
 enum {
 	tcRELOP = 0x08, tcADDOP = 0x10, tcMULOP = 0x18,
-	tcAEQOP = 0x20, tcMEQOP = 0x28, tcMASK = 0xF8
+	tcAEQOP = 0x20, tcMEQOP = 0x28, tcMASK = 0xF8,
 };
 
 typedef enum {
@@ -109,11 +109,11 @@ u8 lextab[256] = {
 };
 
 // encodings for ops in Items
-enum { rEQ, rNE, rLT, rLE, rGT, rGE }; // RelOps
-enum { aADD, aSUB, aIOR, aXOR }; // AddOps
-enum { mMUL, mDIV, mMOD, mAND, mANN, mLSL, mLSR }; // MulOps
+enum { rEQ, rNE, rLT, rLE, rGT, rGE, }; // RelOps
+enum { aADD, aSUB, aIOR, aXOR, }; // AddOps
+enum { mMUL, mDIV, mMOD, mAND, mANN, mLSL, mLSR, }; // MulOps
 
-u8 invert_relop_tab[6] = { rNE, rEQ, rGE, rGT, rLE, rLT };
+u8 invert_relop_tab[6] = { rNE, rEQ, rGE, rGT, rLE, rLT, };
 
 typedef struct StringRec* String;
 typedef struct ObjectRec* Object;
@@ -183,10 +183,12 @@ enum {           // value
 };
 
 // Object Flags
-#define ofReadOnly 1
-#define ofPublic   2 
-#define ofDefined  4
-#define ofBuiltin  8 // for builtin functions
+enum {
+	ofReadOnly = 1,
+	ofPublic   = 2,
+	ofDefined  = 4,
+	ofBuiltin  = 8, // for builtin functions
+};
 
 // ------------------------------------------------------------------
 
@@ -245,7 +247,9 @@ void print_item(Item x);
 
 
 // Item Flags
-#define ifReadOnly 1
+enum {
+	ifReadOnly = 1,
+};
 
 // ------------------------------------------------------------------
 
@@ -323,8 +327,10 @@ struct CtxRec {
 	u32 xref[8192];
 };
 
-#define cfVisibleEOL 1
-#define cfAbortOnError 2
+enum {
+	cfVisibleEOL   = 1,
+	cfAbortOnError = 2,
+};
 
 CtxRec ctx;
 
@@ -1889,9 +1895,11 @@ void parse_program() {
 
 // ================================================================
 
-#define tmp_reg_count  4
-#define tmp_reg_first  8
-#define tmp_reg_last  11
+enum {
+	tmp_reg_count = 4,
+	tmp_reg_first = 8,
+	tmp_reg_last  = 11,
+};
 
 bool is_tmp_reg(u32 n) {
 	return (n >= tmp_reg_first) && (n <= tmp_reg_last);
