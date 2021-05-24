@@ -1850,6 +1850,10 @@ void parse_enum_def() {
 		if (obj != nil) {
 			error("cannot redefine %s as enum tag\n", name->text);
 		}
+		if (ctx.tok == tASSIGN) {
+			next();
+			val = parse_init_constexpr(ctx.type_int32);
+		}
 		require(tCOMMA);
 		obj = make_var(oConst, name, ctx.type_int32, 0, val);
 		obj->next = ctx.scope->first;

@@ -3,10 +3,18 @@ var i i32 = 3;
 
 enum { ZERO, ONE, TWO, };
 
+enum { A = 5, B, C = 0x10000000, D, E = 50 + 50, F = ONE * TWO, }; 
+
 func start() i32 {
 	_hexout_(ZERO);
 	_hexout_(ONE);
 	_hexout_(TWO);
+	_hexout_(A);
+	_hexout_(B);
+	_hexout_(C);
+	_hexout_(D);
+	_hexout_(E);
+	_hexout_(F);
         return 0;
 }
 
