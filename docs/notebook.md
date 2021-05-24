@@ -2,6 +2,29 @@
 
 A place to jot down ideas and/or commentary about the work in progress.
 
+### 2021 May 24 - Where was I?
+
+Implemented basic global scope enum support and changed remaining #defines
+in compiler.c to enums.
+
+Yanked out the lexer and built up rewriter.c that does a pretty limit
+C to whatever language this is transform by mostly passing code through
+but rewriting simple patterns like:
+
+- void name(at an, bt bn) {  ->  func name(an at, bn bt) {
+- type name = ...  -> var name types = ...
+- struct name { ... -> type name struct { ...
+
+Discovered that demo/life.src bitrotted.  Git bisect identifies the guilty
+commit as cfe2d815bea0dd47d0ebeae933d673f4bf16cd6d "compiler: logical and/or
+improvements.
+
+Also d30153ccc6a1f5e61d13094999e703504153aa94 "copmiler: scanner fetches input
+data in chunks" seems to have broken the correct printing of error lines.
+
+Considering replacing varargs error io... error("file %s has %u typos",fn,n)
+em("file "); es(fn); es(" has "); eu(n); ee(" typos");  kinda gross.
+
 ### 2020 Mar 15 - Non-optimal codegen
 
 1030-flow-control shows inefficient branch patterns around if-x-continue usage:
