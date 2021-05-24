@@ -1,23 +1,29 @@
 
-program := { vardef | funcdef }
+program := { vardef ";" | funcdef ( ";" | block) | typedef ";" }
 
 
-vardef := "var" ident [ ":" type ] [ "=" <expr> ] ";"
+vardef := "var" ident [ ":" type ] [ "=" <expr> ]
 
 
-funcdef := "func" ident "(" [ paramdef { "," paramdef } ] ")" [ type ]  ( ";" | block )
+funcdef := "func" ident "(" [ paramdef { "," paramdef } ] ")" [ type ] 
 
 paramdef := ident ":" type
 
 
-recorddef := "record" [ "(" qualident ")" ] "{" { fielddef } "}"
+structdef := "struct" [ "(" qualident ")" ] "{" { fielddef } "}"
 
 fielddef := ident ":" type ","
 
 
-type := ident [ arraydef | "&"]
+arraydef := "[" integer { "," integer } "]" type
 
-arraydef := "[" [ integer { "," integer } ] "]"
+slicedef := "[" "]" type
+
+
+typedef := "type" ident type
+
+
+type := ident | slicedef | arraydef | structdef | structdef | funcdef
 
 
 operand := literal | identifier | "(" expression ")"
