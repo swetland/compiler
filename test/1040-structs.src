@@ -22,6 +22,8 @@ func print(p *Point) {
 var p0 Point = { x: 45, y: 17 };
 var p1 Point = { x: 5, y: 3 };
 
+var p2 struct { x i32, y i32, } = { x: 7, y: 6 };
+
 func start() i32 {
 	_hexout_(p0.x);
 	_hexout_(p0.y);
@@ -35,5 +37,7 @@ func start() i32 {
 	z.x = 0x10203040;
 	z.y = 0x50607080;
 	print(&z);
+	_hexout_(p2.x);
+	_hexout_(p2.y);
 	return 0;
 }
