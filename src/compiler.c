@@ -45,7 +45,7 @@ typedef enum {
 	tSEMI, tCOLON, tDOT, tCOMMA, tNOT, tAND, tOR, tBANG,
 	tASSIGN, tINC, tDEC,
 	// Keywords
-	tTYPE, tFUNC, tSTRUCT, tVAR,
+	tTYPE, tFUNC, tSTRUCT, tVAR, tENUM,
 	tIF, tELSE, tWHILE,
 	tBREAK, tCONTINUE, tRETURN,
 	tFOR, tSWITCH, tCASE,
@@ -64,7 +64,7 @@ char *tnames[] = {
 	"*=",    "/=",    "%=", "&=", "&~=", "<<=", ">>=", "",
 	";",     ":",     ".",  ",",  "~",   "&&",  "||",  "!",
 	"=",     "++",    "--",
-	"type", "func", "struct", "var",
+	"type", "func", "struct", "var", "enum",
 	"if", "else", "while",
 	"break", "continue", "return",
 	"for", "switch", "case",
@@ -295,6 +295,7 @@ struct CtxRec {
 	String idn_case;
 	String idn_func;
 	String idn_else;
+	String idn_enum;
 	String idn_true;
 	String idn_type;
 	String idn_break;
@@ -529,6 +530,7 @@ void init_ctx() {
 	ctx.idn_case     = make_string("case", 4);
 	ctx.idn_func     = make_string("func", 4);
 	ctx.idn_else     = make_string("else", 4);
+	ctx.idn_enum     = make_string("enum", 4);
 	ctx.idn_true     = make_string("true", 4);
 	ctx.idn_type     = make_string("type", 4);
 	ctx.idn_break    = make_string("break", 5);
@@ -716,6 +718,7 @@ token_t scan_keyword(u32 len) {
 		if (idn == ctx.idn_case) { return tCASE; }
 		if (idn == ctx.idn_func) { return tFUNC; }
 		if (idn == ctx.idn_else) { return tELSE; }
+		if (idn == ctx.idn_enum) { return tENUM; }
 		if (idn == ctx.idn_true) { return tTRUE; }
 		if (idn == ctx.idn_type) { return tTYPE; }
 	} else if (len == 5) {
@@ -1012,7 +1015,7 @@ void parse_expr(Item x);
 
 String parse_name(const char* what) {
 	if (ctx.tok != tIDN) {
-		error("expected %s, found %s", what, tnames[ctx.tok]);
+		error("expected %s, found %s %u", what, tnames[ctx.tok], ctx.tok);
 	}
 	String str = ctx.ident;
 	next();
@@ -1736,7 +1739,7 @@ void parse_function() {
 	Object first = nil;
 	Object last = nil;
 	u32 n = 0;
-	String fname = parse_name("funcion name");
+	String fname = parse_name("function name");
 	Type rettype = ctx.type_void;
 
 	require(tOPAREN);
@@ -1838,6 +1841,25 @@ void parse_type_def() {
 	require(tSEMI);
 }
 
+void parse_enum_def() {
+	require(tOBRACE);
+	u32 val = 0;
+	while (ctx.tok != tCBRACE) {
+		String name = parse_name("enum tag name");
+		Object obj = find(name);
+		if (obj != nil) {
+			error("cannot redefine %s as enum tag\n", name->text);
+		}
+		require(tCOMMA);
+		obj = make_var(oConst, name, ctx.type_int32, 0, val);
+		obj->next = ctx.scope->first;
+		ctx.scope->first = obj;
+		val++;
+	}
+	require(tCBRACE);
+	require(tSEMI);
+}
+
 void parse_program() {
 	next();
 	for (;;) {
@@ -1850,6 +1872,9 @@ void parse_program() {
 		} else if (ctx.tok == tVAR) {
 			next();
 			parse_global_var();
+		} else if (ctx.tok == tENUM) {
+			next();
+			parse_enum_def();
 		} else if (ctx.tok == tEOF) {
 			return;
 		} else {
@@ -2015,6 +2040,8 @@ void gen_item_from_obj(Item x, Object obj) {
 		set_item(x, iRegInd, obj->type, SB, obj->value, 0);
 	} else if (obj->kind == oFunc) {
 		set_item(x, iFunc, obj->type, 0, obj->value, 0);
+	} else if (obj->kind == oConst) {
+		set_item(x, iConst, obj->type, 0, obj->value, 0);
 	} else {
 		error("unsupported identifier");
 	}

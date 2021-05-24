@@ -1,0 +1,12 @@
+
+var i i32 = 3;
+
+enum { ZERO, ONE, TWO, };
+
+func start() i32 {
+	_hexout_(ZERO);
+	_hexout_(ONE);
+	_hexout_(TWO);
+        return 0;
+}
+

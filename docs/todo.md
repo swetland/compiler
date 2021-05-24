@@ -3,10 +3,11 @@
 ### Compiler
 
 - [ ] support for slices & string constants
-- [ ] support for enums, or convert enums to consts
 - [ ] break/continue to label
 - [ ] const / readonly
 - [ ] type inference for var definitions
+- [ ] support for named enums
+- [x] support for global anonymous enums
 - [x] continue
 - [x] support for arrays
 - [x] support for pointers

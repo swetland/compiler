@@ -1,5 +1,5 @@
 
-program := { vardef ";" | funcdef ( ";" | block) | typedef ";" }
+program := { vardef ";" | funcdef ( ";" | block) | typedef ";" | enumdef ";" }
 
 
 vardef := "var" ident [ ":" type ] [ "=" <expr> ]
@@ -20,10 +20,13 @@ arraydef := "[" integer { "," integer } "]" type
 slicedef := "[" "]" type
 
 
+enumdef := "enum" "{" { ident "," } "}"
+
+
 typedef := "type" ident type
 
 
-type := ident | slicedef | arraydef | structdef | structdef | funcdef
+type := ident | slicedef | arraydef | structdef | structdef | funcdef | enumdef
 
 
 operand := literal | identifier | "(" expression ")"
