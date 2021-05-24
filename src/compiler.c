@@ -658,6 +658,7 @@ u32 scan() {
 	}
 	ctx.cc = ctx.iobuffer[ctx.ionext];
 	ctx.ionext++;
+	ctx.byteoffset++;
 	return ctx.cc;
 }
 
