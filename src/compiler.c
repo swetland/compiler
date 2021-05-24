@@ -586,6 +586,12 @@ bool compatible_type(Type dst, Type src, Item x) {
 			return true;
 		}
 	}
+	// TODO: should we care about int to byte truncation anywhere?
+	if (dst->kind == tByte) {
+		if ((src->kind == tInt32) || (src->kind == tBool)) {
+			return true;
+		}
+	}
 	return same_type(dst, src);
 }
 
