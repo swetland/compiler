@@ -1,6 +1,7 @@
 // Copyright 2020, Brian Swetland <swetland@frotz.net>
 // Licensed under the Apache License, Version 2.0.
 
+#if C
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
@@ -15,11 +16,18 @@
 
 #include "risc5.h"
 
+// builtin types
 #define nil 0
-
 typedef uint32_t u32;
 typedef int32_t i32;
 typedef uint8_t u8;
+
+// rewriter only handles single word types
+typedef uint32_t token_t;
+typedef char* str;
+typedef char** args;
+typedef uint32_t* u32ptr;
+#endif
 
 enum { FNMAXARGS = 8, };
 
@@ -29,7 +37,7 @@ enum {
 	tcAEQOP = 0x20, tcMEQOP = 0x28, tcMASK = 0xF8,
 };
 
-typedef enum {
+enum {
 	// EndMarks, Braces, Brackets Parens
 	tEOF, tEOL, tOBRACE, tCBRACE, tOBRACK, tCBRACK, tOPAREN, tCPAREN,
 	// RelOps (do not reorder)
@@ -53,9 +61,9 @@ typedef enum {
 	tIDN, tNUM, tSTR,
 	// used internal to the lexer but never returned
 	tSPC, tINV, tDQT, tSQT, tMSC,
-} token_t;
+};
 
-char *tnames[] = {
+str tnames[] = {
 	"<EOF>", "<EOL>", "{",  "}",  "[",   "]",   "(",   ")",
 	"==",    "!=",    "<",  "<=", ">",   ">=",  "",    "",
 	"+",     "-",     "|",  "^",  "",    "",    "",    "",
@@ -115,14 +123,6 @@ enum { mMUL, mDIV, mMOD, mAND, mANN, mLSL, mLSR, }; // MulOps
 
 u8 invert_relop_tab[6] = { rNE, rEQ, rGE, rGT, rLE, rLT, };
 
-typedef struct StringRec* String;
-typedef struct ObjectRec* Object;
-typedef struct ScopeRec* Scope;
-typedef struct FixupRec* Fixup;
-typedef struct TypeRec* Type;
-typedef struct ItemRec* Item;
-typedef struct CtxRec* Ctx;
-
 typedef struct StringRec StringRec;
 typedef struct ObjectRec ObjectRec;
 typedef struct ScopeRec ScopeRec;
@@ -130,6 +130,14 @@ typedef struct FixupRec FixupRec;
 typedef struct TypeRec TypeRec;
 typedef struct ItemRec ItemRec;
 typedef struct CtxRec CtxRec;
+
+typedef struct StringRec* String;
+typedef struct ObjectRec* Object;
+typedef struct ScopeRec* Scope;
+typedef struct FixupRec* Fixup;
+typedef struct TypeRec* Type;
+typedef struct ItemRec* Item;
+typedef struct CtxRec* Ctx;
 
 struct StringRec {
 	String next;
@@ -216,7 +224,7 @@ enum {
 	tUndefined,
 };
 
-const char* type_id_tab[] = {
+str type_id_tab[] = {
 	"void", "byte", "bool", "int32", "nil", "*", "[]", "[]",
 	"struct", "func", "undef",
 };
@@ -242,7 +250,7 @@ enum {           // r       a         b
 	iFunc,
 };
 
-const char* item_id_tab[] = { "Const", "Reg", "RegInd", "Comp", "Func" };
+str item_id_tab[] = { "Const", "Reg", "RegInd", "Comp", "Func" };
 void print_item(Item x);
 
 
@@ -597,7 +605,11 @@ bool compatible_type(Type dst, Type src, Item x) {
 
 void dump_file_line(const char* fn, u32 offset);
 
+#if C
 void error(const char *fmt, ...) {
+#else
+void error(const char *fmt) {
+#endif
 	va_list ap;
 
 	fprintf(stderr,"%s:%d: ", ctx.filename, ctx.linenumber);
@@ -635,7 +647,7 @@ void load(const char* filename) {
 	ctx.byteoffset = 0;
 }
 
-int unhex(u32 ch) {
+i32 unhex(u32 ch) {
 	if ((ch >= '0') && (ch <= '9')) {
 		return ch - '0';
 	}
@@ -1513,7 +1525,7 @@ u32 parse_init_constexpr(Type type) {
 	return x.a;
 }
 
-u32 parse_array_init(Object var, u32* data, u32 dmax, u32 sz) {
+u32 parse_array_init(Object var, u32ptr data, u32 dmax, u32 sz) {
 	memset(data, 0, dmax);
 	u32 n = 0;
 	while (true) {
@@ -1534,7 +1546,7 @@ u32 parse_array_init(Object var, u32* data, u32 dmax, u32 sz) {
 	return n;
 }
 
-void parse_struct_init(Object var, u32* data) {
+void parse_struct_init(Object var, u32ptr data) {
 	memset(data, 0, var->type->size);
 	while (true) {
 		if (ctx.tok == tCBRACE) {
@@ -2811,10 +2823,10 @@ void gen_trace_code(const char* msg, u32 pc) {
 }
 // ================================================================
 
-int main(int argc, char **argv) {
-	const char *outname = "out.bin";
-	const char *lstname = nil;
-	const char *srcname = nil;
+i32 main(int argc, args argv) {
+	str outname = "out.bin";
+	str lstname = nil;
+	str srcname = nil;
 	bool dump = false;
 	bool scan_only = false;
 

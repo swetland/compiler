@@ -213,6 +213,32 @@ void init_ctx() {
 	make_keyword("continue", tCONTINUE);
 }
 
+void dump_file_line(const char* fn, u32 offset) {
+	int fd = open(fn, O_RDONLY);
+	if (fd < 0) {
+		return;
+	}
+	if (lseek(fd, offset, SEEK_SET) != offset) {
+		close(fd);
+		return;
+	}
+	char line[256];
+	int r = read(fd, line, 255);
+	if (r > 0) {
+		line[r] = 0;
+		int n = 0;
+		while (n < r) {
+			if (line[n] == '\n') {
+				line[n] = 0;
+				break;
+			}
+			n++;
+		}
+		fprintf(stderr, "\n%s", line);
+	}
+	close(fd);
+}
+
 void error(const char *fmt, ...) {
 	va_list ap;
 
@@ -220,6 +246,9 @@ void error(const char *fmt, ...) {
 	va_start(ap, fmt);
 	vfprintf(stderr, fmt, ap);
 	va_end(ap);
+	if (ctx.linenumber > 0) {
+		dump_file_line(ctx.filename, ctx.lineoffset);
+	}
 	fprintf(stderr, "\n\n");
 	exit(1);
 }
@@ -271,6 +300,7 @@ u32 scan() {
 	}
 	ctx.cc = ctx.iobuffer[ctx.ionext];
 	ctx.ionext++;
+	ctx.byteoffset++;
 	return ctx.cc;
 }
 
@@ -665,13 +695,7 @@ void parse_array(String type, String name) {
 }
 
 void parse_program() {
-	nextq();
-
-	// use the first enum as the mark of when we're past any
-	// C-only boilerplate
-	while (ctx.tok != tENUM) {
-		nextq();
-	}
+	next();
 
 	for (;;) {
 		if (ctx.tok == tENUM) {

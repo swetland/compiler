@@ -4,12 +4,28 @@ all: bin/compiler bin/fs bin/r5d bin/r5e bin/mkinstab out/test/summary.txt
 clean:
 	rm -rf bin out
 
-CFLAGS := -Wall -O2 -g -Iexternal/oberon-risc-emu -Isrc
+out/compiler.src: out/compiler.txt bin/rewriter
+	@mkdir -p out
+	bin/rewriter out/compiler.txt > out/compiler.src
+
+out/compiler.txt: src/compiler.c bin/preproc
+	@mkdir -p out
+	bin/preproc < src/compiler.c > out/compiler.txt
+
+CFLAGS := -Wall -O2 -g -Iexternal/oberon-risc-emu -Isrc -fno-builtin
 CC := gcc
 
 bin/compiler: src/compiler.c src/risc5dis.c out/risc5ins.h
 	@mkdir -p bin
-	$(CC) -o $@ $(CFLAGS) src/compiler.c src/risc5dis.c
+	$(CC) -o $@ $(CFLAGS) -Wno-unused-result -DC src/compiler.c src/risc5dis.c
+
+bin/rewriter: src/rewriter.c
+	@mkdir -p bin
+	$(CC) -o $@ $(CFLAGS) src/rewriter.c
+
+bin/preproc: src/preproc.c
+	@mkdir -p bin
+	$(CC) -o $@ $(CFLAGS) src/preproc.c
 
 bin/fs: src/fs.c src/fs.h
 	@mkdir -p bin
