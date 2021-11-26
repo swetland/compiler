@@ -1,5 +1,5 @@
 
-all: bin/compiler bin/fs bin/r5d bin/r5e bin/mkinstab out/test/summary.txt
+all: bin/compiler bin/compiler2 bin/fs bin/r5d bin/r5e bin/mkinstab out/test/summary.txt
 
 clean:
 	rm -rf bin out
@@ -13,11 +13,17 @@ out/compiler.txt: src/compiler.c bin/preproc
 	bin/preproc < src/compiler.c > out/compiler.txt
 
 CFLAGS := -Wall -O2 -g -Iexternal/oberon-risc-emu -Isrc -fno-builtin
+CFLAGS += -Wno-unused-but-set-variable
+
 CC := gcc
 
 bin/compiler: src/compiler.c src/risc5dis.c out/risc5ins.h
 	@mkdir -p bin
 	$(CC) -o $@ $(CFLAGS) -Wno-unused-result -DC src/compiler.c src/risc5dis.c
+
+bin/compiler2: src/compiler2.c
+	@mkdir -p bin
+	$(CC) -o $@ $(CFLAGS) -Wno-unused-result -DC src/compiler2.c
 
 bin/rewriter: src/rewriter.c
 	@mkdir -p bin
