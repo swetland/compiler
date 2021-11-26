@@ -29,90 +29,8 @@ typedef char** args;
 typedef uint32_t* u32ptr;
 #endif
 
-// token classes (tok & tcMASK)
-enum {
-	tcRELOP = 0x08, tcADDOP = 0x10, tcMULOP = 0x18,
-	tcAEQOP = 0x20, tcMEQOP = 0x28, tcMASK = 0xF8,
-};
-
-enum {
-	// EndMarks, Braces, Brackets Parens
-	tEOF, tEOL, tOBRACE, tCBRACE, tOBRACK, tCBRACK, tOPAREN, tCPAREN,
-	// RelOps (do not reorder)
-	tEQ, tNE, tLT, tLE, tGT, tGE, tx0E, tx0F,
-	// AddOps (do not reorder)
-	tPLUS, tMINUS, tPIPE, tCARET, tx14, tx15, tx16, tx17,
-	// MulOps (do not reorder)
-	tSTAR, tSLASH, tPERCENT, tAMP, tANDNOT, tLEFT, tRIGHT, tx1F,
-	// AsnOps (do not reorder)
-	tADDEQ, tSUBEQ, tOREQ, tXOREQ, tx24, tx25, tx26, tx27,
-	tMULEQ, tDIVEQ, tMODEQ, tANDEQ, tANNEQ, tLSEQ, tRSEQ, t2F,
-	// Various, UnaryNot, LogicalOps,
-	tSEMI, tCOLON, tDOT, tCOMMA, tNOT, tAND, tOR, tBANG,
-	tASSIGN, tINC, tDEC,
-	// Keywords
-	tTYPE, tFUNC, tSTRUCT, tVAR, tENUM,
-	tIF, tELSE, tWHILE,
-	tBREAK, tCONTINUE, tRETURN,
-	tFOR, tSWITCH, tCASE,
-	tTRUE, tFALSE, tNIL,
-	tIDN, tNUM, tSTR,
-	// used internal to the lexer but never returned
-	tSPC, tINV, tDQT, tSQT, tMSC,
-};
-
-str tnames[] = {
-	"<EOF>", "<EOL>", "{",  "}",  "[",   "]",   "(",   ")",
-	"==",    "!=",    "<",  "<=", ">",   ">=",  "",    "",
-	"+",     "-",     "|",  "^",  "",    "",    "",    "",
-	"*",     "/",     "%",  "&",  "&~",  "<<",  ">>",  "",
-	"+=",    "-=",    "|=", "^=", "",    "",    "",    "",
-	"*=",    "/=",    "%=", "&=", "&~=", "<<=", ">>=", "",
-	";",     ":",     ".",  ",",  "~",   "&&",  "||",  "!",
-	"=",     "++",    "--",
-	"type", "func", "struct", "var", "enum",
-	"if", "else", "while",
-	"break", "continue", "return",
-	"for", "switch", "case",
-	"true", "false", "nil",
-	"<ID>", "<NUM>", "<STR>",
-	"<SPC>", "<INV>", "<DQT>", "<SQT>", "<MSC>",
-};
-
-u8 lextab[256] = {
-	tEOF, tINV, tINV, tINV, tINV, tINV, tINV, tINV,
-	tINV, tSPC, tEOL, tSPC, tINV, tSPC, tINV, tINV,
-	tINV, tINV, tINV, tINV, tINV, tINV, tINV, tINV,
-	tINV, tINV, tINV, tINV, tINV, tINV, tINV, tINV,
-	tSPC, tBANG, tDQT, tMSC, tMSC, tPERCENT, tAMP, tSQT,
-	tOPAREN, tCPAREN, tSTAR, tPLUS, tCOMMA, tMINUS, tDOT, tSLASH,
-	tNUM, tNUM, tNUM, tNUM, tNUM, tNUM, tNUM, tNUM,
-	tNUM, tNUM, tCOLON, tSEMI, tLT, tASSIGN, tGT, tMSC,
-	tMSC, tIDN, tIDN, tIDN, tIDN, tIDN, tIDN, tIDN,
-	tIDN, tIDN, tIDN, tIDN, tIDN, tIDN, tIDN, tIDN,
-	tIDN, tIDN, tIDN, tIDN, tIDN, tIDN, tIDN, tIDN,
-	tIDN, tIDN, tIDN, tOBRACK, tMSC, tCBRACK, tCARET, tIDN,
-	tMSC, tIDN, tIDN, tIDN, tIDN, tIDN, tIDN, tIDN,
-	tIDN, tIDN, tIDN, tIDN, tIDN, tIDN, tIDN, tIDN,
-	tIDN, tIDN, tIDN, tIDN, tIDN, tIDN, tIDN, tIDN,
-	tIDN, tIDN, tIDN, tOBRACE, tPIPE, tCBRACE, tNOT, tINV,
-	tINV, tINV, tINV, tINV, tINV, tINV, tINV, tINV,
-	tINV, tINV, tINV, tINV, tINV, tINV, tINV, tINV,
-	tINV, tINV, tINV, tINV, tINV, tINV, tINV, tINV,
-	tINV, tINV, tINV, tINV, tINV, tINV, tINV, tINV,
-	tINV, tINV, tINV, tINV, tINV, tINV, tINV, tINV,
-	tINV, tINV, tINV, tINV, tINV, tINV, tINV, tINV,
-	tINV, tINV, tINV, tINV, tINV, tINV, tINV, tINV,
-	tINV, tINV, tINV, tINV, tINV, tINV, tINV, tINV,
-	tINV, tINV, tINV, tINV, tINV, tINV, tINV, tINV,
-	tINV, tINV, tINV, tINV, tINV, tINV, tINV, tINV,
-	tINV, tINV, tINV, tINV, tINV, tINV, tINV, tINV,
-	tINV, tINV, tINV, tINV, tINV, tINV, tINV, tINV,
-	tINV, tINV, tINV, tINV, tINV, tINV, tINV, tINV,
-	tINV, tINV, tINV, tINV, tINV, tINV, tINV, tINV,
-	tINV, tINV, tINV, tINV, tINV, tINV, tINV, tINV,
-	tINV, tINV, tINV, tINV, tINV, tINV, tINV, tINV,
-};
+// ------------------------------------------------------------------
+// structures
 
 typedef struct StringRec StringRec;
 typedef struct CtxRec CtxRec;
@@ -127,6 +45,7 @@ struct StringRec {
 };
 
 // ------------------------------------------------------------------
+// compiler global context
 
 struct CtxRec {
 	const char* filename;  // filename of active source
@@ -262,6 +181,94 @@ void ctx_open_source(const char* filename) {
 	ctx.lineoffset = 0;
 	ctx.byteoffset = 0;
 }
+
+// ================================================================
+// lexical scanner
+
+// token classes (tok & tcMASK)
+enum {
+	tcRELOP = 0x08, tcADDOP = 0x10, tcMULOP = 0x18,
+	tcAEQOP = 0x20, tcMEQOP = 0x28, tcMASK = 0xF8,
+};
+
+enum {
+	// EndMarks, Braces, Brackets Parens
+	tEOF, tEOL, tOBRACE, tCBRACE, tOBRACK, tCBRACK, tOPAREN, tCPAREN,
+	// RelOps (do not reorder)
+	tEQ, tNE, tLT, tLE, tGT, tGE, tx0E, tx0F,
+	// AddOps (do not reorder)
+	tPLUS, tMINUS, tPIPE, tCARET, tx14, tx15, tx16, tx17,
+	// MulOps (do not reorder)
+	tSTAR, tSLASH, tPERCENT, tAMP, tANDNOT, tLEFT, tRIGHT, tx1F,
+	// AsnOps (do not reorder)
+	tADDEQ, tSUBEQ, tOREQ, tXOREQ, tx24, tx25, tx26, tx27,
+	tMULEQ, tDIVEQ, tMODEQ, tANDEQ, tANNEQ, tLSEQ, tRSEQ, t2F,
+	// Various, UnaryNot, LogicalOps,
+	tSEMI, tCOLON, tDOT, tCOMMA, tNOT, tAND, tOR, tBANG,
+	tASSIGN, tINC, tDEC,
+	// Keywords
+	tTYPE, tFUNC, tSTRUCT, tVAR, tENUM,
+	tIF, tELSE, tWHILE,
+	tBREAK, tCONTINUE, tRETURN,
+	tFOR, tSWITCH, tCASE,
+	tTRUE, tFALSE, tNIL,
+	tIDN, tNUM, tSTR,
+	// used internal to the lexer but never returned
+	tSPC, tINV, tDQT, tSQT, tMSC,
+};
+
+str tnames[] = {
+	"<EOF>", "<EOL>", "{",  "}",  "[",   "]",   "(",   ")",
+	"==",    "!=",    "<",  "<=", ">",   ">=",  "",    "",
+	"+",     "-",     "|",  "^",  "",    "",    "",    "",
+	"*",     "/",     "%",  "&",  "&~",  "<<",  ">>",  "",
+	"+=",    "-=",    "|=", "^=", "",    "",    "",    "",
+	"*=",    "/=",    "%=", "&=", "&~=", "<<=", ">>=", "",
+	";",     ":",     ".",  ",",  "~",   "&&",  "||",  "!",
+	"=",     "++",    "--",
+	"type", "func", "struct", "var", "enum",
+	"if", "else", "while",
+	"break", "continue", "return",
+	"for", "switch", "case",
+	"true", "false", "nil",
+	"<ID>", "<NUM>", "<STR>",
+	"<SPC>", "<INV>", "<DQT>", "<SQT>", "<MSC>",
+};
+
+u8 lextab[256] = {
+	tEOF, tINV, tINV, tINV, tINV, tINV, tINV, tINV,
+	tINV, tSPC, tEOL, tSPC, tINV, tSPC, tINV, tINV,
+	tINV, tINV, tINV, tINV, tINV, tINV, tINV, tINV,
+	tINV, tINV, tINV, tINV, tINV, tINV, tINV, tINV,
+	tSPC, tBANG, tDQT, tMSC, tMSC, tPERCENT, tAMP, tSQT,
+	tOPAREN, tCPAREN, tSTAR, tPLUS, tCOMMA, tMINUS, tDOT, tSLASH,
+	tNUM, tNUM, tNUM, tNUM, tNUM, tNUM, tNUM, tNUM,
+	tNUM, tNUM, tCOLON, tSEMI, tLT, tASSIGN, tGT, tMSC,
+	tMSC, tIDN, tIDN, tIDN, tIDN, tIDN, tIDN, tIDN,
+	tIDN, tIDN, tIDN, tIDN, tIDN, tIDN, tIDN, tIDN,
+	tIDN, tIDN, tIDN, tIDN, tIDN, tIDN, tIDN, tIDN,
+	tIDN, tIDN, tIDN, tOBRACK, tMSC, tCBRACK, tCARET, tIDN,
+	tMSC, tIDN, tIDN, tIDN, tIDN, tIDN, tIDN, tIDN,
+	tIDN, tIDN, tIDN, tIDN, tIDN, tIDN, tIDN, tIDN,
+	tIDN, tIDN, tIDN, tIDN, tIDN, tIDN, tIDN, tIDN,
+	tIDN, tIDN, tIDN, tOBRACE, tPIPE, tCBRACE, tNOT, tINV,
+	tINV, tINV, tINV, tINV, tINV, tINV, tINV, tINV,
+	tINV, tINV, tINV, tINV, tINV, tINV, tINV, tINV,
+	tINV, tINV, tINV, tINV, tINV, tINV, tINV, tINV,
+	tINV, tINV, tINV, tINV, tINV, tINV, tINV, tINV,
+	tINV, tINV, tINV, tINV, tINV, tINV, tINV, tINV,
+	tINV, tINV, tINV, tINV, tINV, tINV, tINV, tINV,
+	tINV, tINV, tINV, tINV, tINV, tINV, tINV, tINV,
+	tINV, tINV, tINV, tINV, tINV, tINV, tINV, tINV,
+	tINV, tINV, tINV, tINV, tINV, tINV, tINV, tINV,
+	tINV, tINV, tINV, tINV, tINV, tINV, tINV, tINV,
+	tINV, tINV, tINV, tINV, tINV, tINV, tINV, tINV,
+	tINV, tINV, tINV, tINV, tINV, tINV, tINV, tINV,
+	tINV, tINV, tINV, tINV, tINV, tINV, tINV, tINV,
+	tINV, tINV, tINV, tINV, tINV, tINV, tINV, tINV,
+	tINV, tINV, tINV, tINV, tINV, tINV, tINV, tINV,
+	tINV, tINV, tINV, tINV, tINV, tINV, tINV, tINV,
+};
 
 i32 unhex(u32 ch) {
 	if ((ch >= '0') && (ch <= '9')) {
