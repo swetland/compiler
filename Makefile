@@ -12,8 +12,9 @@ out/compiler.txt: src/compiler.c bin/preproc
 	@mkdir -p out
 	bin/preproc < src/compiler.c > out/compiler.txt
 
-CFLAGS := -Wall -O2 -g -Iexternal/oberon-risc-emu -Isrc -fno-builtin
-CFLAGS += -Wno-unused-but-set-variable
+CFLAGS := -Wall -g -Iexternal/oberon-risc-emu -Isrc -fno-builtin
+CFLAGS += -Wno-unused-but-set-variable -Wno-unused-variable
+#CFLAGS := -O2
 
 CC := gcc
 

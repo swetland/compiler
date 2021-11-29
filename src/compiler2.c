@@ -24,9 +24,15 @@ typedef uint8_t u8;
 
 // rewriter only handles single word types
 typedef uint32_t token_t;
+typedef uint32_t ast_t;
+typedef uint32_t type_t;
+typedef uint32_t symbol_t;
+typedef uint32_t scope_t;
 typedef char* str;
 typedef char** args;
 typedef uint32_t* u32ptr;
+
+void error(const char *fmt, ...);
 #endif
 
 // ------------------------------------------------------------------
@@ -34,14 +40,136 @@ typedef uint32_t* u32ptr;
 
 typedef struct StringRec StringRec;
 typedef struct CtxRec CtxRec;
+typedef struct AstRec AstRec;
+typedef struct TypeRec TypeRec;
+typedef struct SymbolRec SymbolRec;
+typedef struct ScopeRec ScopeRec;
 
 typedef struct StringRec* String;
 typedef struct CtxRec* Ctx;
+typedef struct AstRec* Ast;
+typedef struct TypeRec* Type;
+typedef struct SymbolRec* Symbol;
+typedef struct ScopeRec* Scope;
 
 struct StringRec {
 	String next;
 	u32 len;
 	char text[0];
+};
+
+enum {
+	AST_NAME,
+	AST_U32,
+	AST_STRING,
+	AST_BINOP,    // EXPR EXPR
+	AST_UNOP,     // EXPR
+	AST_BLOCK,    // STMT*
+	AST_ASSIGN,   // NAME EXPR
+	AST_CALL,     // NAME EXPR*
+	AST_WHILE,    // WHILE EXPR BLOCK
+	AST_IF,       // IF EXPR BLOCKthen BLOCKelse
+	AST_RETURN,   // EXPR
+	AST_BREAK,
+	AST_CONTINUE,
+	AST_LOCAL,    // NAME EXPR
+	AST_PROGRAM,  // (TYPEDEF | ENUMDEF | FUNC | GLOBAL)*
+	AST_TYPEDEF,
+	AST_ENUMDEF,  // FIELD*
+	AST_FUNC,     // BLOCK PARAM*
+	AST_GLOBAL,   // EXPR
+	AST_FIELD,
+	AST_DISCARD,
+	AST_DEREF,
+	AST_INDEX,
+};
+
+str ast_t_names[] = {
+	"NAME", "U32", "STR", "BINOP", "UNOP", "BLOCK", "ASSIGN",
+	"CALL", "WHILE", "IF", "RETURN", "BREAK", "CONTINUE",
+	"LOCAL", "PROGRAM", "TYPEDEF", "ENUMDEF", "FUNCDEF",
+	"GLOBAL", "FIELD", "DISCARD", "DEREF", "INDEX"
+};
+
+struct AstRec {
+	ast_t kind;
+	Ast child;
+	Ast next;
+
+	u32 ival;
+	String name;
+	Symbol sym;
+	Type type;
+};
+
+enum {
+	TYPE_VOID,
+	TYPE_BOOL,
+	TYPE_BYTE,
+	TYPE_I32,
+	TYPE_NIL,
+	TYPE_POINTER,
+	TYPE_ARRAY,
+	TYPE_SLICE,
+	TYPE_RECORD,
+	TYPE_FUNC,
+	TYPE_ENUM,
+	TYPE_UNDEFINED,
+};
+
+str type_id_tab[TYPE_UNDEFINED + 1] = {
+	"void", "bool", "byte", "i32", "nil", "*", "[]", "[]",
+	"struct", "func", "enum", "undef"
+};
+
+struct TypeRec {
+	type_t kind;
+	Type base;      // pointer-to, func-return-type, array-of
+	Symbol sym;     // if not anonymous
+	Symbol first;   // list of params or fields
+	u32 len;        // array, params
+	u32 size;       // in bytes
+};
+
+enum {
+	SYM_CONST,
+	SYM_TYPE,
+	SYM_FUNC,
+	SYM_GLOBAL,
+	SYM_LOCAL,
+	SYM_PARAM,
+	SYM_FIELD,
+};
+
+enum {
+	SYM_IS_READ_ONLY = 1,
+	SYM_IS_PUBLIC = 2,
+	SYM_IS_DEFINED = 4,
+	SYM_IS_BUILTIN = 8,
+};
+
+struct SymbolRec {
+	symbol_t kind;
+	Symbol next;
+	u32 flags;
+	String name;
+	Type type;
+	Symbol first; // list of?
+
+	u32 value; // SYM_CONST
+};
+
+enum {
+	SCOPE_GLOBAL, SCOPE_FUNC, SCOPE_BLOCK, SCOPE_LOOP,
+};
+
+struct ScopeRec {
+	scope_t kind;
+	Scope next;
+	Symbol first;
+	u32 level;
+	//u32 save_stack;
+	// Fixup?
 };
 
 // ------------------------------------------------------------------
@@ -67,6 +195,13 @@ struct CtxRec {
 	String ident;          // used for tIDN
 
 	String strtab;         // TODO: hashtable
+	Symbol typetab;        // TODO: hashtable
+	Scope scope;           // scope stack
+
+	Symbol fn;             // active function being parsed
+
+	ScopeRec global;
+	u32 alloc_global;      // next available global offset
 
 	String idn_if;
 	String idn_for;
@@ -85,15 +220,18 @@ struct CtxRec {
 	String idn_struct;
 	String idn_return;
 	String idn_continue;
-};
 
-enum {
-	cfVisibleEOL   = 1,
-	cfAbortOnError = 2,
-	cfTraceCodeGen = 3,
+	Type type_void;
+	Type type_bool;
+	Type type_byte;
+	Type type_i32;
+	Type type_nil;
+	Type type_string;
 };
 
 CtxRec ctx;
+
+// ------------------------------------------------------------------
 
 String string_make(const char* text, u32 len) {
 	// OPT obviously this wants to be a hash table
@@ -114,6 +252,243 @@ String string_make(const char* text, u32 len) {
 
 	return str;
 }
+
+// ================================================================
+
+Ast ast_make(ast_t kind, u32 ival, String name, Symbol sym, Type type) {
+	Ast a = malloc(sizeof(AstRec));
+	a->kind = kind;
+	a->child = nil;
+	a->next = nil;
+	a->ival = ival;
+	a->name = name;
+	a->sym = sym;
+	a->type = type;
+	return a;
+}
+
+Ast ast_make_binop(u32 op, Ast left, Ast right) {
+	Ast node = ast_make(AST_BINOP, op, nil, nil, nil);
+	node->child = left;
+	left->next = right;
+	return node;
+}
+
+Ast ast_make_unop(u32 op, Ast child) {
+	Ast node = ast_make(AST_UNOP, op, nil, nil, nil);
+	node->child = child;
+	return node;
+}
+
+
+Ast ast_make_simple(ast_t kind, u32 x) {
+	return ast_make(kind, x, nil, nil, nil);
+}
+
+Ast ast_make_const(ast_t kind, u32 x, Type type) {
+	return ast_make(kind, x, nil, nil, type);
+}
+
+Ast ast_make_name(String name) {
+	return ast_make(AST_NAME, 0, name, nil, nil);
+}
+
+// ================================================================
+
+Symbol symbol_make(symbol_t kind, u32 flags, String name, Type type, u32 value) {
+	Symbol s = malloc(sizeof(SymbolRec));
+	s->kind = kind;
+	s->flags = flags;
+	s->name = name;
+	s->type = type;
+	s->value = value;
+	s->first = nil;
+	return s;
+}
+
+void symbol_add_global(Symbol sym) {
+	sym->next = ctx.global.first;
+	ctx.global.first = sym;
+}
+
+// search the scope stack for a symbol
+Symbol symbol_find(String str) {
+	Scope scope = ctx.scope;
+	while (scope != nil) {
+		Symbol sym = scope->first;
+		while (sym != nil) {
+			if (sym->name == str) {
+				return sym;
+			}
+			sym = sym->next;
+		}
+		scope = scope->next;
+	}
+	return nil;
+}
+
+// ================================================================
+
+Type type_make(type_t kind, Type base, u32 len, u32 size) {
+	Type t = malloc(sizeof(TypeRec));
+	t->kind = kind;
+	t->base = base;
+	t->sym = nil;
+	t->first = nil;
+	t->len = len;
+	t->size = size;
+	return t;
+}
+
+void type_add(Type type, String name) {
+	Symbol sym = symbol_make(SYM_TYPE, 0, name, type, 0);
+	if (type->sym == nil) {
+		// only set the the type's object if it is
+		// not already set (otherwise aliases will
+		// clobber the canonical type names -- yuck!)
+		type->sym = sym;
+	}
+	sym->next = ctx.typetab;
+	ctx.typetab = sym;
+}
+
+Type type_find(String name) {
+	Symbol sym = ctx.typetab;
+	while (sym != nil) {
+		if (sym->name == name) {
+			return sym->type;
+		}
+		sym = sym->next;
+	}
+	return nil;
+}
+
+Type type_setup(const char* text, u32 tlen, u32 kind, u32 size) {
+	String name = string_make(text, tlen);
+	Type type = type_make(kind, nil, 0, size);
+	type_add(type, name);
+	return type;
+}
+
+bool type_is_same(Type a, Type b) {
+	if (a->kind != b->kind) {
+		return false;
+	}
+	if (a->base != b->base) {
+		return false;
+	}
+	if (a->len != b->len) {
+		return false;
+	}
+	Symbol a1 = a->first;
+	Symbol b1 = b->first;
+	while ((a1 != nil) && (b1 != nil)) {
+		// check that parameters and fields match
+		if (!type_is_same(a1->type, b1->type)) {
+			return false;
+		}
+	}
+	if ((a1 != nil) || (b1 != nil)) {
+		// mismatched number of parameters or fields
+		return false;
+	}
+	return true;
+}
+
+void type_dump(Type type, bool use_short_name) {
+	if (use_short_name && (type->sym != nil)) {
+		printf("%s", type->sym->name->text);
+	} else if (type->kind == TYPE_ARRAY) {
+		printf("[%u]", type->len);
+		type_dump(type->base, true);
+	} else if (type->kind == TYPE_RECORD) {
+		printf("struct {\n");
+		Symbol field = type->first;
+		while (field != nil) {
+			printf("    %s ", field->name->text);
+			type_dump(field->type, true);
+			printf(", // off=%u, sz=%u\n", field->value, field->type->size);
+			field = field->next;
+		}
+		printf("}");
+	} else {
+		printf("%s", type_id_tab[type->kind]);
+		if ((type->kind == TYPE_POINTER) || (type->kind == TYPE_SLICE)) {
+			type_dump(type->base, true);
+		}
+	}
+}
+
+// ================================================================
+
+// push a new scope, adding list of symbols if provided
+Scope scope_push(scope_t kind, Symbol list) {
+	Scope scope = malloc(sizeof(ScopeRec));
+	scope->kind = kind;
+	scope->next = ctx.scope;
+	scope->first = list;
+	scope->level = ctx.scope->level + 1;
+	ctx.scope = scope;
+	return scope;
+}
+
+void scope_add_symbol(Scope scope, Symbol sym) {
+	sym->next = scope->first;
+	scope->first = sym;
+}
+
+Scope scope_pop() {
+	if (ctx.scope->level == 0) {
+		error("cannot pop the global scope");
+	}
+
+	Scope scope = ctx.scope;
+	ctx.scope = scope->next;
+	return scope;
+}
+
+// find the first surrounding scope of a specified kind
+Scope scope_find(scope_t scope_kind) {
+	Scope scope = ctx.scope;
+	while (scope != nil) {
+		if (scope->kind == scope_kind) {
+			return scope;
+		}
+		scope = scope->next;
+	}
+	return nil;
+}
+
+enum {
+	BI_PRINT_HEX_32,
+	BI_PUT_C,
+};
+
+void builtin_make(const char* name, u32 id, Type p0, Type p1, Type rtn) {
+	String fname = string_make(name, strlen(name));
+	Type type = type_make(TYPE_FUNC, rtn, 0, 0);
+	type->sym = symbol_make(SYM_FUNC, SYM_IS_DEFINED | SYM_IS_BUILTIN, fname, type, id);
+
+	if (p0 != nil) {
+		Symbol param = symbol_make(SYM_PARAM, 0, string_make("a", 1), p0, 0);
+		type->sym->first = param;
+		type->first = param;
+		type->len = 1;
+		if (p1 != nil) {
+			param->next = symbol_make(SYM_PARAM, 0, string_make("b", 1), p1, 1);
+			type->len = 2;
+		}
+	}
+	symbol_add_global(type->sym);
+}
+
+// ================================================================
+
+enum {
+	cfVisibleEOL   = 1,
+	cfAbortOnError = 2,
+	cfTraceCodeGen = 3,
+};
 
 void ctx_init() {
 	memset(&ctx, 0, sizeof(ctx));
@@ -136,18 +511,34 @@ void ctx_init() {
 	ctx.idn_struct   = string_make("struct", 6);
 	ctx.idn_return   = string_make("return", 6);
 	ctx.idn_continue = string_make("continue", 8);
+
+	// install built-in basic types
+	ctx.type_void    = type_setup("void", 4, TYPE_VOID, 0);
+	ctx.type_byte    = type_setup("byte", 4, TYPE_BYTE, 1);
+	ctx.type_bool    = type_setup("bool", 4, TYPE_BOOL, 1);
+	ctx.type_i32     = type_setup("i32",  3, TYPE_I32, 4);
+	ctx.type_nil     = type_setup("nil",  3, TYPE_NIL, 4);
+	ctx.type_string  = type_setup("str",  3, TYPE_SLICE, 8);
+	ctx.type_string->base = ctx.type_byte;
+
+	// magic builtin functions
+	builtin_make("_hexout_", BI_PRINT_HEX_32, ctx.type_i32, nil, ctx.type_void);
+	builtin_make("_putc_", BI_PUT_C, ctx.type_i32, nil, ctx.type_void);
+
+	ctx.scope = &(ctx.global);
 }
 
 void dump_file_line(const char* fn, u32 offset);
 
 #if C
-void error(const char *fmt, ...) {
+void error(const char *fmt, ...)
 #else
-void error(const char *fmt) {
+void error(const char *fmt)
 #endif
+{
 	va_list ap;
 
-	fprintf(stderr,"%s:%d: ", ctx.filename, ctx.linenumber);
+	fprintf(stderr,"\n%s:%d: ", ctx.filename, ctx.linenumber);
 	va_start(ap, fmt);
 	vfprintf(stderr, fmt, ap);
 	va_end(ap);
@@ -573,9 +964,6 @@ void require(token_t tok) {
 
 // ================================================================
 
-#if 0
-void parse_expr(Item x);
-
 String parse_name(const char* what) {
 	if (ctx.tok != tIDN) {
 		error("expected %s, found %s %u", what, tnames[ctx.tok], ctx.tok);
@@ -585,264 +973,160 @@ String parse_name(const char* what) {
 	return str;
 }
 
-void parse_operand(Item x) {
+Ast parse_expr();
+
+Ast parse_operand() {
+	Ast node = nil;
 	if (ctx.tok == tNUM) {
-		set_item(x, iConst, ctx.type_int32, 0, ctx.num, 0);
+		node = ast_make_const(AST_U32, ctx.num, ctx.type_i32);
 	} else if (ctx.tok == tSTR) {
 		error("<TODO> string const");
 	} else if (ctx.tok == tTRUE) {
-		set_item(x, iConst, ctx.type_bool, 0, 1, 0);
+		node = ast_make_const(AST_U32, 1, ctx.type_bool);
 	} else if (ctx.tok == tFALSE) {
-		set_item(x, iConst, ctx.type_bool, 0, 0, 0);
+		node = ast_make_const(AST_U32, 0, ctx.type_bool);
 	} else if (ctx.tok == tNIL) {
-		set_item(x, iConst, ctx.type_nil, 0, 0, 0);
+		node = ast_make_const(AST_U32, 0, ctx.type_nil);
 	} else if (ctx.tok == tOPAREN) {
 		next();
-		parse_expr(x);
+		node = parse_expr();
 		require(tCPAREN);
-		return;
+		return node;
 	} else if (ctx.tok == tIDN) {
-		String str = ctx.ident;
-		Object obj = find(str);
-		if (obj == nil) {
-			error("unknown identifier '%s'", str->text);
+		if (symbol_find(ctx.ident) == nil) {
+			error("undefined identifier '%s'", ctx.ident->text);
 		}
-		gen_item_from_obj(x, obj);
+		node = ast_make_name(ctx.ident);
 	} else {
 		error("invalid expression");
 	}
 	next();
+	return node;
 }
 
-void dereference(Item x, String name) {
-	if (x->kind != iRegInd) {
-		error("internal: cannot deref via item kind %u", x->kind);
-	}
-
-	if (x->type->kind == tRecord) {
-		Object field = x->type->first;
-		while (field != nil) {
-			if (field->name == name) {
-				x->type = field->type;
-				x->a = x->a + field->value;
-				return;
-			}
-			field = field->next;
-		}
-		error("field '%s' does not exist", name->text);
-	} else {
-		error("internal: cannot deref non-structs");
-	}
-}
-
-void parse_primary_expr(Item x) {
-	parse_operand(x);
+Ast parse_primary_expr() {
+	Ast node = parse_operand();
 	while (true) {
 		if (ctx.tok == tOPAREN) {
 			next();
-			if (x->kind != iFunc) {
-				error("cannot call non-function");
-			}
-			// TODO ptr-to-func
+			//VALIDATE as func or ptr-to-func
 			u32 n = 0;
-			Object param = x->type->first;
-			while (param != nil) {
-				if (ctx.tok == tCPAREN) {
-					error("too few parameters for %s()", x->type->obj->name->text);
-				}
-				if (n != 0) {
+
+			Ast call = ast_make_simple(AST_CALL, 0);
+			call->child = node;
+
+			while (ctx.tok != tCPAREN) {
+				Ast param = parse_expr();
+				node->next = param;
+				node = param;
+				if (ctx.tok != tCPAREN) {
 					require(tCOMMA);
 				}
-				ItemRec y;
-				parse_expr(&y);
-				if (!compatible_type(param->type, y.type, &y)) {
-					error("incompatible type for parameter '%s'\n", param->name->text);
-				}
-				if (param->type->kind == tArray) {
-					gen_ref_param(n, &y);
-				} else {
-					gen_param(n, &y);
-				}
-				param = param->next;
 				n++;
 			}
 			require(tCPAREN);
-			gen_call(x);
+			call->ival = n;
+			node = call;
 		} else if (ctx.tok == tDOT) {
 			next();
 			String name = parse_name("field name");
-			if (x->type->kind == tRecord) {
-				dereference(x, name);
-			} else if ((x->type->kind == tPointer) &&
-				(x->type->base->kind == tRecord)) {
-				gen_deref_ptr(x);
-				dereference(x, name);
-			} else {
-				error("can only use '.' with struct or pointer-to-struct");
-			}
+			// VALIDATE appropriate name for type
+			// VALIDATE type is ptr or struct
+			Ast dot = ast_make_simple(AST_DEREF, 0);
+			dot->child = node;
+			dot->name = name;
+			node = dot;
 		} else if (ctx.tok == tOBRACK) {
 			next();
-			ItemRec y;
-			parse_expr(&y);
+			Ast index = ast_make_simple(AST_INDEX, 0);
+			index->child = node;
+			index->child->next = parse_expr();
+			node = index;
 			require(tCBRACK);
-			if (x->type->kind != tArray) {
-				error("can only use [] with array");
-			}
-			if (x->kind != iRegInd) {
-				error("internal: cannot index via item kind %u", x->kind);
-			}
-			if (y.kind == iConst) {
-				if (y.a >= x->type->len) {
-					error("array index out of range");
-				}
-				x->a = x->a + y.a * x->type->base->size;
-				x->type = x->type->base;
-			} else {
-				gen_index(x, &y);
-			}
+			//VALIDATE lhs is array, rhs is appropriate numeric
 		} else {
 			break;
 		}
 	}
+	return node;
 }
 
-void parse_unary_expr(Item x) {
-	if (ctx.tok == tPLUS) {
+Ast parse_unary_expr() {
+	u32 op = ctx.tok;
+	if (op == tPLUS) {
 		next();
-		parse_unary_expr(x);
-	} else if ((ctx.tok == tMINUS) || (ctx.tok == tBANG) || (ctx.tok == tNOT)) {
+		return parse_unary_expr();
+	} else if ((op == tMINUS) || (op == tBANG) || (op == tNOT) || (op== tAMP)) {
 		u32 op = ctx.tok;
 		next();
-		parse_unary_expr(x);
-		if ((x->kind == iComp) && (op == tBANG)) {
-			x->r = invert_relop(x->r);
-		} else {
-			gen_unary_op(op, x);
-		}
-	} else if (ctx.tok == tAMP) {
-		next();
-		parse_unary_expr(x);
-		gen_get_ptr(x);
+		return ast_make_unop(op, parse_unary_expr());
 	} else {
-		parse_primary_expr(x);
+		return parse_primary_expr();
 	}
 }
 
-void parse_mul_expr(Item x) {
-	parse_unary_expr(x);
+Ast parse_mul_expr() {
+	Ast node = parse_unary_expr();
 	while ((ctx.tok & tcMASK) == tcMULOP) {
-		u32 mulop = ctx.tok - tSTAR;
+		u32 op = ctx.tok;
 		next();
-		ItemRec y;
-		parse_unary_expr(&y);
-		gen_mul_op(mulop, x, &y);
+		node = ast_make_binop(op, node, parse_unary_expr());
 	}
+	return node;
 }
 
-void parse_add_expr(Item x) {
-	parse_mul_expr(x);
+Ast parse_add_expr() {
+	Ast node = parse_mul_expr();
 	while ((ctx.tok & tcMASK) == tcADDOP) {
-		u32 addop = ctx.tok - tPLUS;
+		u32 op = ctx.tok;
 		next();
-		ItemRec y;
-		parse_mul_expr(&y);
-		gen_add_op(addop, x, &y);
+		node = ast_make_binop(op, node, parse_mul_expr());
 	}
+	return node;
 }
 
-void parse_rel_expr(Item x) {
-	parse_add_expr(x);
+Ast parse_rel_expr() {
+	Ast node = parse_add_expr();
 	if ((ctx.tok & tcMASK) == tcRELOP) {
-		u32 relop = ctx.tok - tEQ;
+		u32 op = ctx.tok;
 		next();
-		ItemRec y;
-		parse_add_expr(&y);
-		gen_rel_op(relop, x, &y);
+		node = ast_make_binop(op, node, parse_add_expr());
 	}
+	return node;
 }
 
-void parse_and_expr(Item x) {
-	parse_rel_expr(x);
+Ast parse_and_expr() {
+	// XXX needs to handle short-circuit codegen etc
+	Ast node = parse_rel_expr();
 	if (ctx.tok == tAND) {
-		Scope outer = push_scope(sBlock, nil);
-
-		// if !x goto nope
-		gen_branch_cond(x, false);
-		add_scope_fixup(outer);
-
 		while (ctx.tok == tAND) {
 			next();
-			ItemRec y;
-
-			// if !y goto nope
-			parse_rel_expr(&y);
-			gen_branch_cond(&y, false);
-			add_scope_fixup(outer);
+			node = ast_make_binop(tAND, node, parse_rel_expr());
 		}
-		// res = true, goto done
-		gen_load_bool1(x, true);
-		u32 l0_true = gen_branch_fwd();
-
-		// nope: res = false
-		pop_scope();
-		gen_load_bool2(x);
-
-		// done:
-		fixup_branch_fwd(l0_true);
 	}
+	return node;
 }
 
-void parse_expr(Item x) {
-	parse_and_expr(x);
+Ast parse_expr() {
+	Ast node = parse_and_expr();
 	if (ctx.tok == tOR) {
-		Scope outer = push_scope(sBlock, nil);
-
-		// if x goto yup
-		gen_branch_cond(x, true);
-		add_scope_fixup(outer);
-
 		while (ctx.tok == tOR) {
 			next();
-			ItemRec y;
-
-			// if y goto yup
-			parse_and_expr(&y);
-			gen_branch_cond(&y, true);
-			add_scope_fixup(outer);
+			node = ast_make_binop(tOR, node, parse_and_expr());
 		}
-		// res = false, goto done
-		gen_load_bool1(x, false);
-		u32 l0_false = gen_branch_fwd();
-
-		// yup: res = true
-		pop_scope();
-		gen_load_bool2(x);
-
-		// done:
-		fixup_branch_fwd(l0_false);
 	}
-}
-
-Type find_type(String name) {
-	Object obj = ctx.typetab;
-	while (obj != nil) {
-		if (obj->name == name) {
-			return obj->type;
-		}
-		obj = obj->next;
-	}
-	return nil;
+	return node;
 }
 
 // fwd_ref_ok indicates that an undefined typename
 // may be treated as a forward reference.  This is
-// only used for pointers (size their size does not
-// depend on their target).
+// only used for pointers (because their size does
+// not depend on their target).
 Type parse_type(bool fwd_ref_ok);
 
 Type parse_struct_type() {
-	Type rectype = make_type(tRecord, nil, nil, nil, 0, 0);
-	Object last = nil;
+	Type rectype = type_make(TYPE_RECORD, nil, 0, 0);
+	Symbol last = nil;
 	require(tOBRACE);
 	while (true) {
 		if (ctx.tok == tCBRACE) {
@@ -851,7 +1135,7 @@ Type parse_struct_type() {
 		}
 		String name = parse_name("field name");
 		Type type = parse_type(false);
-		Object field = make_object(oField, name, type, nil, 0, rectype->size);
+		Symbol field = symbol_make(SYM_FIELD, 0, name, type, rectype->size);
 
 		// TODO sub-word packing
 		rectype->size += (type->size + 3) & (~3);
@@ -875,21 +1159,22 @@ Type parse_struct_type() {
 Type parse_array_type() {
 	if (ctx.tok == tCBRACK) {
 		next();
-		return make_type(tSlice, parse_type(false), nil, nil, 0, 8);
+		return type_make(TYPE_SLICE, parse_type(false), 0, 8);
 	} else {
-		ItemRec x;
-		parse_expr(&x);
+		Ast expr = parse_expr();
+		// XXX get const to nelem
 		require(tCBRACK);
-		if ((x.kind != iConst) || (x.type != ctx.type_int32)) {
-			error("array size must be integer constant");
-		}
+		u32 nelem = 0;
+//		if ((x.kind != iConst) || (x.type != ctx.type_int32)) {
+//			error("array size must be integer constant");
+//		}
 		//XXX check for >0
 		Type base = parse_type(false);
-		u32 sz = x.a * base->size;
-		if (sz < x.a) {
+		u32 sz = nelem * base->size;
+		if (sz < nelem) {
 			error("array size overflow");
 		}
-		return make_type(tArray, base, nil, nil, x.a, sz);
+		return type_make(TYPE_ARRAY, base, nelem, sz);
 	}
 }
 
@@ -901,7 +1186,7 @@ Type parse_func_type() {
 Type parse_type(bool fwd_ref_ok) {
 	if (ctx.tok == tSTAR) { // pointer-to
 		next();
-		return make_type(tPointer, parse_type(true), nil, nil, 0, 4);
+		return type_make(TYPE_POINTER, parse_type(true), 0, 4);
 	} else if (ctx.tok == tOBRACK) { // array-of
 		next();
 		return parse_array_type();
@@ -914,11 +1199,11 @@ Type parse_type(bool fwd_ref_ok) {
 	} else if (ctx.tok == tIDN) {
 		String name = ctx.ident;
 		next();
-		Type type = find_type(name);
+		Type type = type_find(name);
 		if (type == nil) {
 			if (fwd_ref_ok) {
-				type = make_type(tUndefined, nil, nil, nil, 0, 0);
-				add_type(type, name);
+				type = type_make(TYPE_UNDEFINED, nil, 0, 0);
+				type_add(type, name);
 			} else {
 				error("undefined type '%s' not usable here", name->text);
 			}
@@ -930,169 +1215,123 @@ Type parse_type(bool fwd_ref_ok) {
 	}
 }
 
-void parse_block();
+Ast parse_block();
 
-void parse_while() {
-	ItemRec x;
-	u32 save = ctx.pc_continue;
-	ctx.pc_continue = ctx.pc; // for backward branch
-
-	parse_expr(&x);
-	u32 l1_br_false = gen_branch_cond(&x, false);
-
+Ast parse_while() {
+	Ast expr = parse_expr();
 	require(tOBRACE);
-	push_scope(sLoop, nil);
-	parse_block();
-	gen_branch_back(ctx.pc_continue);
-	pop_scope();
-
-	fixup_branch_fwd(l1_br_false);
-
-	ctx.pc_continue = save;
+	scope_push(SCOPE_LOOP, nil);
+	Ast block = parse_block();
+	scope_pop();
+	Ast node = ast_make_simple(AST_WHILE, 0);
+	node->child = expr;
+	expr->next = block;
+	return node;
 }
 
-void parse_if() {
-	Scope outer = push_scope(sBlock, nil);
-
-	ItemRec x;
-	parse_expr(&x);
-	// branch over "if" code
-	u32 l0_br_false = gen_branch_cond(&x, false);
-
-	// generate "if" code
+Ast parse_if() {
+	Scope outer = scope_push(SCOPE_BLOCK, nil);
+	Ast expr = parse_expr();
 	require(tOBRACE);
-	push_scope(sBlock, nil);
-	parse_block();
-	pop_scope();
-
-	// branch past "else" code
-	gen_branch_fwd();
-	add_scope_fixup(outer);
-
+	scope_push(SCOPE_BLOCK, nil);
+	Ast block = parse_block();
+	scope_pop();
+	Ast ifnode = ast_make_simple(AST_IF, 0);
+	ifnode->child = expr;
+	expr->next = block;
+	Ast last = block;
 	while (ctx.tok == tELSE) {
 		next();
-		fixup_branch_fwd(l0_br_false);
 		if (ctx.tok == tIF) {
 			next();
-			parse_expr(&x);
-			// branch over "if" code
-			l0_br_false = gen_branch_cond(&x, false);
+			Ast expr = parse_expr();
 
 			// generate "if else" code
 			require(tOBRACE);
-			push_scope(sBlock, nil);
-			parse_block();
-			pop_scope();
+			scope_push(SCOPE_BLOCK, nil);
+			Ast block = parse_block();
+			scope_pop();
 
-			// branch past "else" code
-			gen_branch_fwd();
-			add_scope_fixup(outer);
+			last->next = expr;
+			expr->next = block;
+			last = block;
 		} else {
 			// generate "else" code
 			require(tOBRACE);
-			push_scope(sBlock, nil);
-			parse_block();
-			pop_scope();
+			scope_push(SCOPE_BLOCK, nil);
+			Ast block = parse_block();
+			scope_pop();
 
-			// close outer scope
-			pop_scope();
-			return; // no further fixups needed
+			last = block;
+			break;
 		}
 	}
-	fixup_branch_fwd(l0_br_false);
 
 	// close outer scope
-	pop_scope();
+	scope_pop();
+	return ifnode;
 }
 
-void parse_return() {
-	ItemRec x;
+Ast parse_return() {
+	Ast node = ast_make_simple(AST_RETURN, 0);
 	if (ctx.tok == tSEMI) {
-		if (ctx.fn->type->base != ctx.type_void) {
-			error("function requires return type");
-		}
+		//if (ctx.fn->type->base != ctx.type_void) {
+		//	error("function requires return type");
+		//}
 		next();
-		x.type = ctx.type_void;
+		//x.type = ctx.type_void;
 	} else {
-		parse_expr(&x);
-		if (!compatible_type(ctx.fn->type->base, x.type, &x)) {
-			error("return types do not match");
-		}
+		node->child = parse_expr();
+		//if (!compatible_type(ctx.fn->type->base, x.type, &x)) {
+		//	error("return types do not match");
+		//}
 		require(tSEMI);
 	}
-	gen_return(&x);
+	return node;
 }
 
-void parse_break() {
+Ast parse_break() {
 	// XXX break-to-labeled-loop support
-	gen_branch_fwd();
-	Scope scope = find_scope(sLoop);
+	Scope scope = scope_find(SCOPE_LOOP);
 	if (scope == nil) {
 		error("break must be used from inside a looping construct");
 	}
-	add_scope_fixup(scope);
 	require(tSEMI);
+	return ast_make_simple(AST_BREAK, 0);
 }
 
-void parse_continue() {
+Ast parse_continue() {
 	// XXX continue-to-labeled-loop support
-	if (ctx.pc_continue == 0) {
-		error("continue must be used from inside a looping construct");
-	}
-	gen_branch_back(ctx.pc_continue);
+	//if (ctx.pc_continue == 0) {
+	//	error("continue must be used from inside a looping construct");
+	//}
 	require(tSEMI);
+	return ast_make_simple(AST_CONTINUE, 0);
 }
 
-void STORE(u32 val, u32* ptr, u32 n, u32 sz) {
-	if (sz == 4) {
-		ptr[n >> 2] = val;
-	} else if (sz == 1) {
-		((u8*)ptr)[n] = val;
-	}
-}
-
-u32 parse_init_constexpr(Type type) {
-	if (type->size > 4) {
-		error("<TODO> larger init constexpr types");
-	}
-	ItemRec x;
-	parse_expr(&x);
-	if (x.kind != iConst) {
-		error("non-constant initializer");
-	}
-	return x.a;
-}
-
-u32 parse_array_init(Object var, u32ptr data, u32 dmax, u32 sz) {
-	memset(data, 0, dmax);
-	u32 n = 0;
+void parse_array_init(Symbol var) {
 	while (true) {
 		if (ctx.tok == tCBRACE) {
 			next();
 			break;
 		}
-		if (n >= dmax) {
-			error("initializer too large");
-		}
-		u32 v = parse_init_constexpr(var->type->base);
-		STORE(v, data, n, sz); 
-		n += sz;
+		// VALIDATE out of bounds?
+		Ast expr = parse_expr();
+		// VALIDATE const expr and store
 		if (ctx.tok != tCBRACE) {
 			require(tCOMMA);
 		}
 	}
-	return n;
 }
 
-void parse_struct_init(Object var, u32ptr data) {
-	memset(data, 0, var->type->size);
+void parse_struct_init(Symbol var) {
 	while (true) {
 		if (ctx.tok == tCBRACE) {
 			next();
 			break;
 		}
 		String name = parse_name("field name");
-		Object field = var->type->first;
+		Symbol field = var->type->first;
 		while (true) {
 			if (field == nil) {
 				error("structure has no '%s' field", name->text);
@@ -1103,46 +1342,50 @@ void parse_struct_init(Object var, u32ptr data) {
 			field = field->next;
 		}
 		require(tCOLON);
-		u32 v = parse_init_constexpr(field->type);
-		STORE(v, data, field->value, 4);
+		Ast expr = parse_expr();
+		// VALIDATE const and store
 		if (ctx.tok != tCBRACE) {
 			require(tCOMMA);
 		}
 	}
 }
 
-void parse_local_var() {
+Ast parse_local_var() {
 	String name = parse_name("variable name");
 	// TODO: allow type inference
 	Type type = parse_type(false);
 
-	Object lvar = make_var(oVar, name, type, 0, ctx.alloc_stack);
-	lvar->next = ctx.scope->first;
-	ctx.scope->first = lvar;
+	Symbol sym = symbol_make(SYM_LOCAL, 0, name, type, 0); //ctx.alloc_stack);
+	scope_add_symbol(ctx.scope, sym);
 
+#if 0
 	ctx.alloc_stack = ctx.alloc_stack + type->size;
 	if (ctx.local_stack < ctx.alloc_stack) {
 		ctx.local_stack = ctx.alloc_stack;
 	}
+#endif
 
 	if (ctx.tok == tASSIGN) {
 		next();
-		ItemRec x, y;
-		parse_expr(&x);
-		gen_item_from_obj(&y, lvar);
-		gen_store(&x, &y);
+		Ast expr = parse_expr();
+		// VALIDATE constexpr and store
 	}
 	require(tSEMI);
+
+	Ast node = ast_make_simple(AST_LOCAL, 0);
+	node->name = name;
+	node->type = type;
+	node->sym = sym;
+	return node;
 }
 
-void parse_global_var() {
+Ast parse_global_var() {
 	String name = parse_name("variable name");
 	// TODO: allow type inference
 	Type type = parse_type(false);
 
-	Object gvar = make_var(oGlobal, name, type, 0, ctx.alloc_global);
-	gvar->next = ctx.scope->first;
-	ctx.scope->first = gvar;
+	Symbol sym = symbol_make(SYM_GLOBAL, 0, name, type, ctx.alloc_global);
+	symbol_add_global(sym);
 	ctx.alloc_global = ctx.alloc_global + type->size;
 	ctx.alloc_global = (ctx.alloc_global + 3) & (~3); // round to word
 
@@ -1150,128 +1393,123 @@ void parse_global_var() {
 		next();
 		if (ctx.tok == tOBRACE) {
 			next();
-			u32* data = ctx.data + (gvar->value >> 2);
-			if (type->kind == tArray) {
-				parse_array_init(gvar, data, type->size, type->base->size);
-			} else if (type->kind == tRecord) {
-				parse_struct_init(gvar, data);
+			if (type->kind == TYPE_ARRAY) {
+				parse_array_init(sym);
+			} else if (type->kind == TYPE_RECORD) {
+				parse_struct_init(sym);
 			} else {
 				error("cannot initialize this way");
 			}
 		} else {
-			ItemRec x;
-			parse_expr(&x);
-			if (x.kind != iConst) {
-				error("non-constant global initializer");
-			}
-			//TODO: check type/size compat
-			ctx.data[gvar->value >> 2] = x.a;
+			Ast expr = parse_expr();
+			// VALIDATE obtain value, require const, and STORE
 		}
 	}
 	require(tSEMI);
+	Ast node = ast_make_simple(AST_GLOBAL, 0);
+	node->name = name;
+	node->type = type;
+	node->sym = sym;
+	return node;
 }
 
-void parse_expr_statement() {
-	ItemRec x;
-	parse_expr(&x);
+Ast parse_expr_statement() {
+	Ast node = nil;
+	Ast left = parse_expr();
+	Ast right = nil;
 	if (ctx.tok == tASSIGN) {
 		next();
-		ItemRec y;
-		parse_expr(&y);
-		if (!compatible_type(x.type, y.type, &x)) {
-			error("incompatible type in assignment");
-		}
-		gen_store(&y, &x);
+		right = parse_expr();
+		node = ast_make_binop(tASSIGN, left, right);
 	} else if ((ctx.tok & tcMASK) == tcAEQOP) {
-		u32 op = ctx.tok - tADDEQ;
+		u32 op = ctx.tok; // - tADDEQ;
 		next();
-		ItemRec y, z;
-		parse_expr(&y);
-		copy_item(&x, &z);
-		gen_add_op(op, &x, &y);
-		gen_store(&x, &z);
+		right = parse_expr();
+		node = ast_make_binop(op, left, right);
 	} else if ((ctx.tok & tcMASK) == tcMEQOP) {
-		u32 op = ctx.tok - tMULEQ;
+		u32 op = ctx.tok; // - tMULEQ;
 		next();
-		ItemRec y, z;
-		parse_expr(&y);
-		copy_item(&x, &z);
-		gen_add_op(op, &x, &y);
-		gen_store(&x, &z);
+		right = parse_expr();
+		node = ast_make_binop(op, left, right);
 	} else if ((ctx.tok == tINC) || (ctx.tok == tDEC)) {
-		ItemRec y, z;
-		set_item(&y, iConst, ctx.type_int32, 0, 1, 0);
-		copy_item(&x, &z);
-		if (ctx.tok == tINC) {
-			gen_add_op(aADD, &x, &y);
-		} else {
-			gen_add_op(aSUB, &x, &y);
-		}
-		gen_store(&x, &z);
+		node = ast_make_unop(ctx.tok, left);
 		next();
 	} else {
-		gen_discard(&x);
+		node = ast_make_simple(AST_DISCARD, 0);
+		node->child = left;
 	}
 	require(tSEMI);
+	return node;
 }
 
-void parse_block() {
+Ast parse_block() {
+	Ast block = ast_make_simple(AST_BLOCK, 0);
+	Ast last = nil;
+	Ast node;
 	while (true) {
 		if (ctx.tok == tCBRACE) {
 			next();
 			break;
 		} else if (ctx.tok == tRETURN) {
 			next();
-			parse_return();
+			node = parse_return();
 		} else if (ctx.tok == tBREAK) {
 			next();
-			parse_break();
+			node = parse_break();
 		} else if (ctx.tok == tCONTINUE) {
 			next();
-			parse_continue();
+			node = parse_continue();
 		} else if (ctx.tok == tWHILE) {
 			next();
-			parse_while();
+			node = parse_while();
 		} else if (ctx.tok == tIF) {
 			next();
-			parse_if();
+			node = parse_if();
 		} else if (ctx.tok == tVAR) {
 			next();
-			parse_local_var();
+			node = parse_local_var();
 		} else if (ctx.tok == tSEMI) {
 			next();
 			// empty statement
+			continue;
 		} else {
-			parse_expr_statement();
+			node = parse_expr_statement();
 		}
+
+		// append to block's list of statements
+		if (last == nil) {
+			block->child = node;
+		} else {
+			last->next = node;
+		}
+		last = node;
 	}
+	return block;
 }
 
-void parse_function_body(Object fn) {
+Ast parse_function_body(Symbol fn) {
+	Ast node;
 	ctx.fn = fn;
-	gen_prologue(fn);
-	push_scope(sFunc, fn->first); // scope for parameters
-	push_scope(sBlock, nil);      // top scope for function body
-	parse_block();
-	pop_scope();
-	pop_scope();
-	gen_epilogue(fn);
+	scope_push(SCOPE_FUNC, fn->first); // scope for parameters
+	scope_push(SCOPE_BLOCK, nil);      // top scope for function body
+	node = parse_block();
+	scope_pop();
+	scope_pop();
+	ctx.fn = nil;
+	return node;
 }
 
-Object parse_param(String fname, u32 n, Object first, Object last) {
-	if (n == FNMAXARGS) {
-		error("too many parameters (%d) for '%s'", FNMAXARGS, fname->text);
-	}
+Symbol parse_param(String fname, u32 n, Symbol first, Symbol last) {
 	String pname = parse_name("parameter name");
 	Type ptype = parse_type(false);
-	Object param = make_var(oParam, pname, ptype, 0, 4 + n * 4);
+	Symbol param = symbol_make(SYM_PARAM, 0, pname, ptype, 4 + n * 4);
 
-	Object obj = first;
-	while (obj != nil) {
-		if (obj->name == param->name) {
+	Symbol sym = first;
+	while (sym != nil) {
+		if (sym->name == param->name) {
 			error("duplicate parameter name '%s'", fname->text);
 		}
-		obj = obj->next;
+		sym = sym->next;
 	}
 
 	if (last != nil) {
@@ -1280,27 +1518,9 @@ Object parse_param(String fname, u32 n, Object first, Object last) {
 	return param;
 }
 
-void make_builtin(const char* name, u32 id, Type p0, Type p1, Type rtn) {
-	String fname = string_make(name, strlen(name));
-	Type type = make_type(tFunc, rtn, nil, nil, 0, 0);
-	type->obj = make_object(oFunc, fname, type, nil, ofBuiltin, id);
-
-	if (p0 != nil) {
-		Object param = make_var(oParam, string_make("a", 1), p0, 0, 0);
-		type->obj->first = param;
-		type->first = param;
-		type->len = 1;
-		if (p1 != nil) {
-			param->next = make_var(oParam, string_make("b", 1), p1, 0, 1);
-			type->len = 2;
-		}
-	}
-	make_global(type->obj);
-}
-
-void parse_function() {
-	Object first = nil;
-	Object last = nil;
+Ast parse_function() {
+	Symbol first = nil;
+	Symbol last = nil;
 	u32 n = 0;
 	String fname = parse_name("function name");
 	Type rettype = ctx.type_void;
@@ -1337,27 +1557,27 @@ void parse_function() {
 	}
 
 	// Look for an existing declaration or definintion of this function
-	Object obj = find(fname);
-	if (obj != nil) {
+	Symbol sym = symbol_find(fname);
+	if (sym != nil) {
 		// such a named identifier exists
 		// check to see if we are in agreement with it
-		if (obj->kind != oFunc) {
+		if (sym->kind != SYM_FUNC) {
 			error("redefining '%s' as function", fname->text);
 		}
-		if (isdef && (obj->flags & ofDefined)) {
+		if (isdef && (sym->flags & SYM_IS_DEFINED)) {
 			error("redefined function '%s'", fname->text);
 		}
-		if (rettype != obj->type->base) {
+		if (rettype != sym->type->base) {
 			error("func '%s' return type differs from decl", fname->text);
 		}
-		if (obj->type->len != n) {
+		if (sym->type->len != n) {
 			error("func '%s' parameter count differs from decl", fname->text);
 		}
-		Object pa = first;
-		Object pb = obj->type->first;
+		Symbol pa = first;
+		Symbol pb = sym->type->first;
 		u32 i = 1;
 		while ((pa != nil) && (pb != nil)) {
-			if (!same_type(pa->type, pb->type)) {
+			if (!type_is_same(pa->type, pb->type)) {
 				error("func '%s' param %u differs from decl", fname->text, i);
 			}
 			pa = pa->next;
@@ -1365,32 +1585,40 @@ void parse_function() {
 		}
 	} else {
 		// if there was no existing record of this function, create one now
-		Type type = make_type(tFunc, rettype, nil, first, n, 0);
-		obj = make_object(oFunc, fname, type, first, 0, 0);
-		type->obj = obj;
-		make_global(obj);
+		Type type = type_make(TYPE_FUNC, rettype, n, 0);
+		type->first = first;
+		sym = symbol_make(SYM_FUNC, 0, fname, type, 0);
+		sym->first = first;
+		type->sym = sym;
+		symbol_add_global(sym);
 	}
+
+	Ast node = ast_make_simple(AST_FUNC, 0);
+	node->name = fname;
+	node->sym = sym;
 
 	// handle definition if it is one
 	if (isdef) {
 		// patch any forward references
-		fixup_branches_fwd(obj->fixups);
+		//fixup_branches_fwd(obj->fixups);
 
 		// mark as defined and save entry address
-		obj->flags |= ofDefined;
-		obj->value = ctx.pc;
-		parse_function_body(obj);
+		sym->flags |= SYM_IS_DEFINED;
+		//sym->value = ctx.pc;
+		node->child = parse_function_body(sym);
 	}
+
+	return node;
 }
 
-void parse_type_def() {
+Ast parse_type_def() {
 	String name = parse_name("type name");
 	Type type = parse_type(false);
-	Type prev = find_type(name);
+	Type prev = type_find(name);
 	if (prev == nil) {
-		add_type(type, name);
+		type_add(type, name);
 	} else {
-		if (prev->kind != tUndefined) {
+		if (prev->kind != TYPE_UNDEFINED) {
 			error("cannot redefine type '%s'\n", name->text);
 		}
 		prev->kind = type->kind;
@@ -1398,60 +1626,140 @@ void parse_type_def() {
 		prev->first = type->first;
 		prev->len = type->len;
 		prev->size = type->size;
-		prev->obj->type = type;
+		prev->sym->type = type;
 		// XXX discard type
+		type = prev;
 	}
 	require(tSEMI);
+	Ast node = ast_make_simple(AST_TYPEDEF, 0);
+	node->name = name;
+	node->type = type;
+	return node;
 }
 
-void parse_enum_def() {
+Ast parse_enum_def() {
+	Ast decl = ast_make_simple(AST_ENUMDEF, 0);
+	Ast last = nil;
+
 	require(tOBRACE);
 	u32 val = 0;
 	while (ctx.tok != tCBRACE) {
 		String name = parse_name("enum tag name");
-		Object obj = find(name);
-		if (obj != nil) {
+		Symbol sym = symbol_find(name);
+		if (sym != nil) {
 			error("cannot redefine %s as enum tag\n", name->text);
 		}
 		if (ctx.tok == tASSIGN) {
 			next();
-			val = parse_init_constexpr(ctx.type_int32);
+			Ast expr = parse_expr();
+			//XXX ensure const and set val
 		}
 		require(tCOMMA);
-		obj = make_var(oConst, name, ctx.type_int32, 0, val);
-		obj->next = ctx.scope->first;
-		ctx.scope->first = obj;
+		Ast node = ast_make(AST_FIELD, val, name, sym, ctx.type_i32);
+		if (last == nil) {
+			decl->child = node;
+		} else {
+			last->next = node;
+		}
+		last = node;
+		symbol_add_global(symbol_make(SYM_CONST, 0, name, ctx.type_i32, val));
 		val++;
 	}
 	require(tCBRACE);
 	require(tSEMI);
+	return decl;
 }
 
-void parse_program() {
+Ast parse_program() {
+	Ast program = ast_make_simple(AST_PROGRAM, 0);
+	Ast last = nil;
+	Ast d = nil;
 	next();
 	for (;;) {
-		if (ctx.tok == tFUNC) {
+		if (ctx.tok == tENUM) {
 			next();
-			parse_function();
+			d = parse_enum_def();
 		} else if (ctx.tok == tTYPE) {
 			next();
-			parse_type_def();
+			d = parse_type_def();
+		} else if (ctx.tok == tFUNC) {
+			next();
+			d = parse_function();
 		} else if (ctx.tok == tVAR) {
 			next();
-			parse_global_var();
-		} else if (ctx.tok == tENUM) {
-			next();
-			parse_enum_def();
+			d = parse_global_var();
 		} else if (ctx.tok == tEOF) {
-			return;
+			return program;
 		} else {
 			expected("function, variable, or type definition");
 		}
+		if (last == nil) {
+			program->child = d;
+		} else {
+			last->next = d;
+		}
+		last = d;
 	}
 }
-#endif
 
-// ================================================================
+void ast_dump_func(Ast node, u32 indent) {
+	Symbol param = node->sym->first;
+	while (param != nil) {
+		u32 i = 0;
+		while (i < indent) { printf("  "); i++; }
+		printf("PARAM '%s' ", param->name->text);
+		type_dump(param->type, true);
+		printf("\n");
+		param = param->next;
+	}
+	u32 i = 0;
+	while (i < indent) { printf("  "); i++; }
+	printf("RETURNS ");
+	type_dump(node->sym->type->base, true);
+	printf("\n");
+}
+
+void ast_dump(Ast node, u32 indent) {
+	u32 i = 0;
+	while (i < indent) { printf("  "); i++; }
+	printf("%s ", ast_t_names[node->kind]);
+	if (node->kind == AST_NAME) {
+		printf("'%s'\n", node->name->text);
+	} else if ((node->kind == AST_BINOP) || (node->kind == AST_UNOP)) {
+		printf("%s\n", tnames[node->ival]);
+	} else if (node->kind == AST_U32) {
+		printf("0x%x\n", node->ival);
+	} else if (node->kind == AST_TYPEDEF) {
+		printf("'%s' ", node->name->text);
+		type_dump(node->type, false);
+		printf("\n");
+	} else {
+		if (node->name) {
+			printf("'%s' ",node->name->text);
+		}
+		if (node->type) {
+			type_dump(node->type, true);
+			printf(" ");
+			//printf("<type %p> ", node->type);
+		}
+		if (node->sym) {
+			//printf("<sym@%p> ", node->sym);
+		}
+		if (node->ival) {
+			printf("%u", node->ival);
+		}
+		printf("\n");
+	}
+	if (node->kind == AST_FUNC) {
+		ast_dump_func(node, indent + 1);
+	}
+	node = node->child;
+	indent = indent + 1;
+	while (node != nil) {
+		ast_dump(node, indent);
+		node = node->next;
+	}
+}
 
 // ================================================================
 
@@ -1524,5 +1832,8 @@ i32 main(int argc, args argv) {
 		}
 	}
 
+	Ast a = parse_program();
+
+	ast_dump(a, 0);
 	return 0;
 }
