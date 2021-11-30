@@ -7,6 +7,7 @@
 - [ ] const / readonly
 - [ ] type inference for var definitions
 - [ ] support for named enums
+- [ ] simplify use of Type/Symbol for type system
 - [x] support for global anonymous enums
 - [x] continue
 - [x] support for arrays

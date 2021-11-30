@@ -345,6 +345,7 @@ Type type_make(type_t kind, Type base, u32 len, u32 size) {
 }
 
 void type_add(Type type, String name) {
+	//fprintf(stderr,"type_add(%s, %s)\n",type_id_tab[type->kind],name->text);
 	Symbol sym = symbol_make(SYM_TYPE, 0, name, type, 0);
 	if (type->sym == nil) {
 		// only set the the type's object if it is
@@ -1216,7 +1217,6 @@ Type parse_array_type() {
 		return type_make(TYPE_SLICE, parse_type(false), 0, 8);
 	} else {
 		Ast expr = parse_expr();
-		// XXX get const to nelem
 		require(tCBRACK);
 		i32 nelem = ast_get_const_i32(expr);
 		if (nelem <= 0) {
@@ -1843,6 +1843,22 @@ void ast_dump(Ast node, u32 indent) {
 	}
 }
 
+#if 0
+void type_dump_all() {
+	Symbol sym = ctx.typetab;
+
+	while (sym != nil) {
+		fprintf(stderr, "Symbol %p '%s'\n", sym, sym->name->text);
+		fprintf(stderr, "  Type %p %s len=%u sz=%u\n",
+		        sym->type, type_id_tab[sym->type->kind],
+		        sym->type->len, sym->type->size);
+		fprintf(stderr, "       sym=%p first=%p\n",
+		        sym->type->sym, sym->type->first);
+		sym = sym->next;
+	}
+}
+#endif
+
 // ================================================================
 
 i32 main(int argc, args argv) {
@@ -1917,6 +1933,8 @@ i32 main(int argc, args argv) {
 	Ast a = parse_program();
 
 	ast_dump(a, 0);
+
+	//type_dump_all();
 
 	return 0;
 }
