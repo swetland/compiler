@@ -201,7 +201,6 @@ struct CtxRec {
 	Symbol fn;             // active function being parsed
 
 	ScopeRec global;
-	u32 alloc_global;      // next available global offset
 
 	String idn_if;
 	String idn_for;
@@ -227,6 +226,12 @@ struct CtxRec {
 	Type type_i32;
 	Type type_nil;
 	Type type_string;
+
+	u32 pc;              // next ins to emit
+	u32 gp;              // next global data to emit
+
+	u32 code[8192];
+	u32 data[8192];
 };
 
 CtxRec ctx;
@@ -279,7 +284,6 @@ Ast ast_make_unop(u32 op, Ast child) {
 	node->child = child;
 	return node;
 }
-
 
 Ast ast_make_simple(ast_t kind, u32 x) {
 	return ast_make(kind, x, nil, nil, nil);
@@ -964,6 +968,54 @@ void require(token_t tok) {
 
 // ================================================================
 
+//TODO: handle overflow and div/mod-by-zero
+i32 ast_get_const_i32(Ast node) {
+	if (node->kind == AST_U32) {
+		return node->ival;
+	} else if (node->kind == AST_NAME) {
+		if (node->sym->kind != SYM_CONST) {
+			error("non-const symbol (%s) in constexpr\n", node->sym->name);
+		}
+		return node->sym->value;
+	} else if (node->kind == AST_BINOP) {
+		i32 left = ast_get_const_i32(node->child);
+		i32 right = ast_get_const_i32(node->child->next);
+		u32 op = node->ival;
+		if (op == tPLUS) {
+			return left + right;
+		} else if (op == tMINUS) {
+			return left - right;
+		} else if (op == tSTAR) {
+			return left * right;
+		} else if (op == tSLASH) {
+			return left / right;
+		} else if (op == tPERCENT) {
+			return left % right;
+		} else if (op == tAMP) {
+			return left & right;
+		} else if (op == tPIPE) {
+			return left | right;
+		} else {
+			error("unsupported BINOP %s\n", tnames[op]);
+		}
+	} else if (node->kind == AST_UNOP) {
+		i32 left = ast_get_const_i32(node->child);
+		u32 op = node->ival;
+		if (op == tPLUS) {
+			return left;
+		} else if (op == tMINUS) {
+			return -left;
+		} else if (op == tBANG) {
+			return !left;
+		} else {
+			error("unsupported UNOP %s\n", tnames[op]);
+		}
+	} else {
+		error("non-const expr (%s)\n", ast_t_names[node->kind]);
+	}
+	return 0;
+}
+
 String parse_name(const char* what) {
 	if (ctx.tok != tIDN) {
 		error("expected %s, found %s %u", what, tnames[ctx.tok], ctx.tok);
@@ -993,10 +1045,12 @@ Ast parse_operand() {
 		require(tCPAREN);
 		return node;
 	} else if (ctx.tok == tIDN) {
-		if (symbol_find(ctx.ident) == nil) {
+		Symbol sym = symbol_find(ctx.ident);
+		if (sym == nil) {
 			error("undefined identifier '%s'", ctx.ident->text);
 		}
 		node = ast_make_name(ctx.ident);
+		node->sym = sym;
 	} else {
 		error("invalid expression");
 	}
@@ -1164,11 +1218,10 @@ Type parse_array_type() {
 		Ast expr = parse_expr();
 		// XXX get const to nelem
 		require(tCBRACK);
-		u32 nelem = 0;
-//		if ((x.kind != iConst) || (x.type != ctx.type_int32)) {
-//			error("array size must be integer constant");
-//		}
-		//XXX check for >0
+		i32 nelem = ast_get_const_i32(expr);
+		if (nelem <= 0) {
+			error("array size must be positive");
+		}
 		Type base = parse_type(false);
 		u32 sz = nelem * base->size;
 		if (sz < nelem) {
@@ -1309,22 +1362,41 @@ Ast parse_continue() {
 	return ast_make_simple(AST_CONTINUE, 0);
 }
 
-void parse_array_init(Symbol var) {
+// unsafe write op
+void STORE(u32 val, u32* ptr, u32 n, u32 sz) {
+	if (sz == 4) {
+		ptr[n >> 2] = val;
+	} else if (sz == 1) {
+		((u8*)ptr)[n] = val;
+	}
+}
+
+u32 parse_array_init(Symbol var, u32ptr data, u32 dmax, u32 sz) {
+	memset(data, 0, dmax);
+	u32 n = 0;
 	while (true) {
 		if (ctx.tok == tCBRACE) {
 			next();
 			break;
 		}
-		// VALIDATE out of bounds?
+		if (n >= dmax) {
+			error("initializer too large");
+		}
 		Ast expr = parse_expr();
-		// VALIDATE const expr and store
+		i32 v = ast_get_const_i32(expr);
+
+		// VALIDATE type compat/fit
+		STORE(v, data, n, sz);
+		n += sz;
 		if (ctx.tok != tCBRACE) {
 			require(tCOMMA);
 		}
 	}
+	return n;
 }
 
-void parse_struct_init(Symbol var) {
+void parse_struct_init(Symbol var, u32ptr data) {
+	memset(data, 0, var->type->size);
 	while (true) {
 		if (ctx.tok == tCBRACE) {
 			next();
@@ -1343,7 +1415,9 @@ void parse_struct_init(Symbol var) {
 		}
 		require(tCOLON);
 		Ast expr = parse_expr();
-		// VALIDATE const and store
+		i32 v = ast_get_const_i32(expr);
+		// VALIDATE type compat/fit
+		STORE(v, data, field->value, 4);
 		if (ctx.tok != tCBRACE) {
 			require(tCOMMA);
 		}
@@ -1365,17 +1439,17 @@ Ast parse_local_var() {
 	}
 #endif
 
-	if (ctx.tok == tASSIGN) {
-		next();
-		Ast expr = parse_expr();
-		// VALIDATE constexpr and store
-	}
-	require(tSEMI);
-
 	Ast node = ast_make_simple(AST_LOCAL, 0);
 	node->name = name;
 	node->type = type;
 	node->sym = sym;
+
+	if (ctx.tok == tASSIGN) {
+		next();
+		node->child = parse_expr();
+	}
+	require(tSEMI);
+
 	return node;
 }
 
@@ -1384,29 +1458,36 @@ Ast parse_global_var() {
 	// TODO: allow type inference
 	Type type = parse_type(false);
 
-	Symbol sym = symbol_make(SYM_GLOBAL, 0, name, type, ctx.alloc_global);
+	Symbol sym = symbol_make(SYM_GLOBAL, 0, name, type, ctx.gp);
 	symbol_add_global(sym);
-	ctx.alloc_global = ctx.alloc_global + type->size;
-	ctx.alloc_global = (ctx.alloc_global + 3) & (~3); // round to word
+
+	// advance global pointer and round to next workd
+	ctx.gp = ctx.gp + type->size;
+	ctx.gp = (ctx.gp + 3) & (~3);
+
+	Ast node = ast_make_simple(AST_GLOBAL, 0);
 
 	if (ctx.tok == tASSIGN) {
 		next();
+		u32* data = ctx.data + (sym->value >> 2);
 		if (ctx.tok == tOBRACE) {
 			next();
 			if (type->kind == TYPE_ARRAY) {
-				parse_array_init(sym);
+				parse_array_init(sym, data, type->size, type->base->size);
 			} else if (type->kind == TYPE_RECORD) {
-				parse_struct_init(sym);
+				parse_struct_init(sym, data);
 			} else {
 				error("cannot initialize this way");
 			}
 		} else {
 			Ast expr = parse_expr();
-			// VALIDATE obtain value, require const, and STORE
+			i32 v = ast_get_const_i32(expr);
+			node->child = expr;
+			// VALIDATE compatible integer type
+			ctx.data[sym->value >> 2] = v;
 		}
 	}
 	require(tSEMI);
-	Ast node = ast_make_simple(AST_GLOBAL, 0);
 	node->name = name;
 	node->type = type;
 	node->sym = sym;
@@ -1652,6 +1733,7 @@ Ast parse_enum_def() {
 		if (ctx.tok == tASSIGN) {
 			next();
 			Ast expr = parse_expr();
+			val = ast_get_const_i32(expr);
 			//XXX ensure const and set val
 		}
 		require(tCOMMA);
@@ -1835,5 +1917,6 @@ i32 main(int argc, args argv) {
 	Ast a = parse_program();
 
 	ast_dump(a, 0);
+
 	return 0;
 }
