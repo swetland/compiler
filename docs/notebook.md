@@ -2,6 +2,34 @@
 
 A place to jot down ideas and/or commentary about the work in progress.
 
+### 2021 Nov 30 - Going backward to go forward.
+
+The single pass straight code generation from parsing approach was working
+but feeling increasingly brittle in the face of trying to get basic 
+optimizations going, etc.  Decided to pause that and shift to compiler2.c
+to start fresh with the existing lexer and rebuilding the parser to
+generate an Abstract Syntax Tree instead.
+
+This allows for multiple passes, simplifies some optimizations, and
+paves the way for generating three-argument IR, SSA, etc.
+
+```
+  FUNCDEF 'fib' 
+    PARAM 'n' i32
+    RETURNS i32
+    BLOCK 
+      IF 
+        BINOP <
+          NAME 'n'
+          U32 0x2
+        BLOCK 
+          RETURN 
+            NAME 'n'
+```
+
+The new compiler can parse all the existing test and demo code, but does
+not yet do any codegen.
+
 ### 2021 May 24 - Where was I?
 
 Implemented basic global scope enum support and changed remaining #defines
