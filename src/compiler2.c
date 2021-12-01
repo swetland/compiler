@@ -168,7 +168,7 @@ struct ScopeRec {
 	Scope next;
 	Symbol first;
 	u32 level;
-	//u32 save_stack;
+	u32 save_stack;
 	// Fixup?
 };
 
@@ -199,7 +199,10 @@ struct CtxRec {
 	Scope scope;           // scope stack
 
 	Symbol fn;             // active function being parsed
-
+	u32 spill_stack;       // where to spill temp regs (TODO: dynamic)
+	u32 local_stack;       // total stack for all locals (params, vars, tmps)
+	u32 alloc_stack;       // where to allocate next var (grows/shrinks as
+	                       // we enter/exit scopes)
 	ScopeRec global;
 
 	String idn_if;
@@ -433,6 +436,8 @@ Scope scope_push(scope_t kind, Symbol list) {
 	scope->next = ctx.scope;
 	scope->first = list;
 	scope->level = ctx.scope->level + 1;
+	// save current stack offset (next local var)
+	scope->save_stack = ctx.alloc_stack;
 	ctx.scope = scope;
 	return scope;
 }
@@ -442,14 +447,19 @@ void scope_add_symbol(Scope scope, Symbol sym) {
 	scope->first = sym;
 }
 
-Scope scope_pop() {
+// pop a scope, return list of symbols
+Symbol scope_pop() {
 	if (ctx.scope->level == 0) {
 		error("cannot pop the global scope");
 	}
 
-	Scope scope = ctx.scope;
-	ctx.scope = scope->next;
-	return scope;
+	// restore prev stack offset (next local var)
+	ctx.alloc_stack = ctx.scope->save_stack;
+
+	Symbol list = ctx.scope->first;
+	// XXX dealloc
+	ctx.scope = ctx.scope->next;
+	return list;
 }
 
 // find the first surrounding scope of a specified kind
@@ -1046,6 +1056,8 @@ Ast parse_operand() {
 		require(tCPAREN);
 		return node;
 	} else if (ctx.tok == tIDN) {
+		// TODO: could happen in an AST pass to allow
+		// for forward references
 		Symbol sym = symbol_find(ctx.ident);
 		if (sym == nil) {
 			error("undefined identifier '%s'", ctx.ident->text);
@@ -1275,7 +1287,7 @@ Ast parse_while() {
 	require(tOBRACE);
 	scope_push(SCOPE_LOOP, nil);
 	Ast block = parse_block();
-	scope_pop();
+	block->sym = scope_pop();
 	Ast node = ast_make_simple(AST_WHILE, 0);
 	node->child = expr;
 	expr->next = block;
@@ -1283,12 +1295,12 @@ Ast parse_while() {
 }
 
 Ast parse_if() {
-	Scope outer = scope_push(SCOPE_BLOCK, nil);
+	// Scope outer = scope_push(SCOPE_BLOCK, nil);
 	Ast expr = parse_expr();
 	require(tOBRACE);
 	scope_push(SCOPE_BLOCK, nil);
 	Ast block = parse_block();
-	scope_pop();
+	block->sym = scope_pop();
 	Ast ifnode = ast_make_simple(AST_IF, 0);
 	ifnode->child = expr;
 	expr->next = block;
@@ -1303,7 +1315,7 @@ Ast parse_if() {
 			require(tOBRACE);
 			scope_push(SCOPE_BLOCK, nil);
 			Ast block = parse_block();
-			scope_pop();
+			block->sym = scope_pop();
 
 			last->next = expr;
 			expr->next = block;
@@ -1313,7 +1325,7 @@ Ast parse_if() {
 			require(tOBRACE);
 			scope_push(SCOPE_BLOCK, nil);
 			Ast block = parse_block();
-			scope_pop();
+			block->sym = scope_pop();
 
 			last = block;
 			break;
@@ -1321,7 +1333,7 @@ Ast parse_if() {
 	}
 
 	// close outer scope
-	scope_pop();
+	// scope_pop();
 	return ifnode;
 }
 
@@ -1355,9 +1367,10 @@ Ast parse_break() {
 
 Ast parse_continue() {
 	// XXX continue-to-labeled-loop support
-	//if (ctx.pc_continue == 0) {
-	//	error("continue must be used from inside a looping construct");
-	//}
+	Scope scope = scope_find(SCOPE_LOOP);
+	if (scope == nil) {
+		error("continue must be used from inside a looping construct");
+	}
 	require(tSEMI);
 	return ast_make_simple(AST_CONTINUE, 0);
 }
@@ -1429,15 +1442,13 @@ Ast parse_local_var() {
 	// TODO: allow type inference
 	Type type = parse_type(false);
 
-	Symbol sym = symbol_make(SYM_LOCAL, 0, name, type, 0); //ctx.alloc_stack);
+	Symbol sym = symbol_make(SYM_LOCAL, 0, name, type, ctx.alloc_stack);
 	scope_add_symbol(ctx.scope, sym);
 
-#if 0
 	ctx.alloc_stack = ctx.alloc_stack + type->size;
 	if (ctx.local_stack < ctx.alloc_stack) {
 		ctx.local_stack = ctx.alloc_stack;
 	}
-#endif
 
 	Ast node = ast_make_simple(AST_LOCAL, 0);
 	node->name = name;
@@ -1571,10 +1582,12 @@ Ast parse_block() {
 Ast parse_function_body(Symbol fn) {
 	Ast node;
 	ctx.fn = fn;
+	ctx.local_stack = 0;
+	ctx.alloc_stack = 0;
 	scope_push(SCOPE_FUNC, fn->first); // scope for parameters
 	scope_push(SCOPE_BLOCK, nil);      // top scope for function body
 	node = parse_block();
-	scope_pop();
+	node->sym = scope_pop();
 	scope_pop();
 	ctx.fn = nil;
 	return node;
@@ -1784,20 +1797,22 @@ Ast parse_program() {
 	}
 }
 
-void ast_dump_func(Ast node, u32 indent) {
-	Symbol param = node->sym->first;
-	while (param != nil) {
+void ast_dump_syms(Symbol sym, str tag, u32 indent) {
+	while (sym != nil) {
 		u32 i = 0;
 		while (i < indent) { printf("  "); i++; }
-		printf("PARAM '%s' ", param->name->text);
-		type_dump(param->type, true);
+		printf("%s '%s' ", tag, sym->name->text);
+		type_dump(sym->type, true);
 		printf("\n");
-		param = param->next;
+		sym = sym->next;
 	}
+}
+
+void ast_dump_rtype(Symbol sym, u32 indent) {
 	u32 i = 0;
 	while (i < indent) { printf("  "); i++; }
-	printf("RETURNS ");
-	type_dump(node->sym->type->base, true);
+	printf("Returns ");
+	type_dump(sym->type->base, true);
 	printf("\n");
 }
 
@@ -1833,7 +1848,11 @@ void ast_dump(Ast node, u32 indent) {
 		printf("\n");
 	}
 	if (node->kind == AST_FUNC) {
-		ast_dump_func(node, indent + 1);
+		ast_dump_syms(node->sym->first, "Param", indent + 1);
+		ast_dump_rtype(node->sym, indent + 1);
+	}
+	if (node->kind == AST_BLOCK) {
+		ast_dump_syms(node->sym, "Local", indent + 1);
 	}
 	node = node->child;
 	indent = indent + 1;
