@@ -2870,7 +2870,16 @@ i32 main(int argc, args argv) {
 	}
 
 	if (srcname == nil) {
-		error("no file specified");
+		printf(
+"usage:    compiler [ <option> | <sourcefilename> ]*\n"
+"\n"
+"options:  -o <filename>    binary output (default 'out.bin')\n"
+"          -l <filename>    listing output (default none)\n"
+"          -v               trace code generation\n"
+"          -s               scan only\n"
+"          -p               dump type context\n"
+"          -A               abort on error\n");
+		return 0;
 	}
 	ctx.filename = srcname;
 
