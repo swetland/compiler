@@ -203,10 +203,10 @@ u32 gen_expr(Ast node);
 void sym_get_loc(Symbol sym, u32* base, i32* offset) {
 	if (sym->kind == SYM_LOCAL) {
 		*base = FP;
-		*offset = -(8 + sym->value);
+		*offset = -(4 + sym->value);
 	} else if (sym->kind == SYM_PARAM) {
 		*base = FP;
-		*offset = sym->value;
+		*offset = 8 + sym->value;
 	} else if (sym->kind == SYM_GLOBAL) {
 		*base = SB;
 		*offset = sym->value;
@@ -382,18 +382,18 @@ void gen_block(Ast node) {
 // ---------------  --------------
 //       arg2             oldarg2
 //       arg1             oldarg1
-// FP -> arg0             oldarg0 <-+
-//       fpsave           oldfp     |
-//       lrsave           oldlp     |
+// FP -> arg0             oldarg0
+//       lrsave           oldlr
+//       fpsave           oldfp   <-+
 //       loc0             oldloc0   |
 //       loc1             oldloc1   |
 //       ...              ...       |
 //       locn             oldlocn   |
-//       newarg2          arg2      |
-//       newarg1          arg1      |
-// SP -> newarg0    FP -> arg0      |
-//                        fpsave ---+
-//                        lrsave
+//       callarg2         arg2      |
+//       callarg1         arg1      |
+// SP -> callarg0         arg0      |
+//                        lrsave    |
+//                  FP -> fpsave ---+
 //                        loc0
 //                        loc1
 //                        ...
@@ -401,6 +401,8 @@ void gen_block(Ast node) {
 
 void gen_func(Ast node) {
 	fprintf(stderr,"gen_func()\n");
+
+	// local space plus saved lr and fp
 	u32 x = node->sym->type->size + 8;
 
 	node->sym->value = ctx.pc;
@@ -412,9 +414,9 @@ void gen_func(Ast node) {
 
 	// generate prologue
 	emit_opi(SUB, SP, SP, x);
-	emit_mem(STW, FP, SP, x - 4);
-	emit_mem(STW, LR, SP, x - 8);
-	emit_opi(ADD, FP, SP, x);
+	emit_mem(STW, LR, SP, x - 4);
+	emit_mem(STW, FP, SP, x - 8);
+	emit_opi(ADD, FP, SP, x - 8);
 
 	// setup list of branches-to-epilogue
 	FixupRec list;
@@ -428,15 +430,16 @@ void gen_func(Ast node) {
 	fixup_branches_fwd(list.next);
 
 	// generate epilogue
-	emit_mem(LDW, LR, FP, x - 8);
-	emit_mem(LDW, FP, FP, x - 4);
+	emit_mem(LDW, LR, FP, 4);
+	emit_mem(LDW, FP, FP, 0);
+	emit_opi(ADD, SP, SP, x);
 	emit_br(AL, LR);
 }
 
 void gen_risc5_simple(Ast node) {
 	fprintf(stderr, "gen_risc5_simple()\n");
 
-	emit_mov(SB, 0); // placeholder SB load
+	emit_movi(SB, 0); // placeholder SB load
 	emit_bi(AL, 0);  // placeholder branch to init
 
 	node = node->child;

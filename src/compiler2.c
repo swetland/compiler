@@ -1908,6 +1908,28 @@ void type_dump_all() {
 
 // ================================================================
 
+void binary_write(const char* outname) {
+	int fd = open(outname, O_CREAT | O_TRUNC | O_WRONLY, 0644);
+	if (fd < 0) {
+		error("cannot open '%s' to write", outname);
+	}
+	u32 n = 0;
+	while (n < ctx.pc) {
+		if (write(fd, ctx.code + (n/4), sizeof(u32)) != sizeof(u32)) {
+			error("error writing '%s'", outname);
+		}
+		n += 4;
+	}
+	n = 0;
+	while (n < ctx.gp) {
+		if (write(fd, ctx.data + (n/4), sizeof(u32)) != sizeof(u32)) {
+			error("error writing '%s'", outname);
+		}
+		n += 4;
+	}
+	close(fd);
+}
+
 void listing_write(const char* listfn, const char* srcfn) {
 	FILE* fin = fopen(srcfn, "r");
 	if (fin == NULL) {
@@ -2040,9 +2062,11 @@ i32 main(int argc, args argv) {
 
 	Ast a = parse_program();
 
-	ast_dump(a, 0);
+	//ast_dump(a, 0);
 
 	gen_risc5_simple(a);
+
+	binary_write(outname);
 
 	if (lstname != nil) {
 		listing_write(lstname, ctx.filename);
