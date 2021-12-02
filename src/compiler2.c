@@ -488,6 +488,7 @@ Scope scope_find(scope_t scope_kind) {
 }
 
 enum {
+	BI_EXIT,
 	BI_PRINT_HEX_32,
 	BI_PUT_C,
 };
@@ -2062,7 +2063,7 @@ i32 main(int argc, args argv) {
 
 	Ast a = parse_program();
 
-	//ast_dump(a, 0);
+	ast_dump(a, 0);
 
 	gen_risc5_simple(a);
 

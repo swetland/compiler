@@ -2472,7 +2472,7 @@ void gen_mul_op(u32 op, Item x, Item y) {
 		gen_load(x);
 		gen_load(y);
 		if (op == MOD) {
-			emit_op(op, x->r, x->r, y->r);
+			emit_op(DIV, x->r, x->r, y->r);
 			emit_op(MOV_H, x->r, 0, 0);
 		} else {
 			emit_op(op, x->r, x->r, y->r);
@@ -2508,6 +2508,7 @@ void gen_unary_op(u32 op, Item x) {
 	}
 	gen_load(x);
 	if (op == tBANG) {
+		// ERROR?  r, r, 1  instead?
 		emit_opi_n(XOR, x->r, x->r, 1);
 	} else if (op == tNOT) {
 		emit_opi_n(XOR, x->r, x->r, 0xFFFFFFFF);

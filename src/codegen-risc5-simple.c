@@ -67,10 +67,20 @@ enum {
 };
 
 void emit_op(u32 op, u32 a, u32 b, u32 c) {
-	emit((op << 16) | (a << 24) | (b << 20) | c);
+	if (op == MOD) {
+		emit_op(DIV, a, b, c);
+		emit_op(MOV_H, a, 0, 0);
+	} else {
+		emit((op << 16) | (a << 24) | (b << 20) | c);
+	}
 }
-void emit_opi(u32 op, u32 a, u32 b, u32 n) {
-	emit(((0x4000 | op) << 16) | (a << 24) | (b << 20) | (n & 0xffff));
+void emit_opi_u16(u32 op, u32 a, u32 b, u32 n) {
+	if (op == MOD) {
+		emit_opi_u16(DIV, a, b, n);
+		emit_op(MOV_H, a, 0, 0);
+	} else {
+		emit(((0x4000 | op) << 16) | (a << 24) | (b << 20) | (n & 0xffff));
+	}
 }
 void emit_mov(u32 dst, u32 src) {
 	if (dst != src) {
@@ -83,37 +93,33 @@ void emit_mov(u32 dst, u32 src) {
 void emit_movi(u32 a, u32 n) {
 	u32 m = n >> 16;
 	if (m == 0) {
-		emit_opi(MOV, a, 0, n);
+		emit_opi_u16(MOV, a, 0, n);
 	} else if (m == 0xFFFF) {
-		emit_opi(MOV | 0x1000, a, 0, n);
+		emit_opi_u16(MOV | 0x1000, a, 0, n);
 	} else {
-		emit_opi(MHI, a, 0, m);
+		emit_opi_u16(MHI, a, 0, m);
 		if ((n & 0xFFFF) != 0) {
-			emit_opi(IOR, a, a, n);
+			emit_opi_u16(IOR, a, a, n);
 		}
 	}
 }
 
-#if 0
 // immediate op, using a temporary register and register op if the
 // immediate argument does not fit the single instruction form
-void emit_opi_n(u32 op, u32 a, u32 b, u32 n) {
+void emit_opi(u32 op, u32 a, u32 b, u32 n) {
 	u32 m = n >> 16;
 	if (m == 0) {
-		emit_opi(op, a, b, n);
+		emit_opi_u16(op, a, b, n);
 	} else if (m == 0xFFFF) {
-		emit_opi(op | 0x1000, a, b, n);
+		emit_opi_u16(op | 0x1000, a, b, n);
 	} else {
-		u32 t0 = get_reg_tmp();
-		emit_opi(MHI, t0, 0, m);
+		emit_opi_u16(MHI, R11, 0, m);
 		if ((n & 0xFFFF) != 0) {
-			emit_opi(IOR, t0, t0, n);
+			emit_opi_u16(IOR, R11, R11, n);
 		}
-		emit_op(op, a, b, t0);
-		put_reg(t0);
+		emit_op(op, a, b, R11);
 	}
 }
-#endif
 
 enum {
 	LDW = 8, LDB = 9, STW = 10, STB = 11
@@ -230,18 +236,26 @@ u32 gen_call(Ast node) {
 	fprintf(stderr,"gen_call()\n");
 	Symbol sym = node->child->sym;
 	Ast arg = node->child->next;
-	emit_opi(SUB, SP, SP, 4 * sym->type->len);
-	u32 n = 0;
-	while (arg != nil) {
-		u32 r = gen_expr(arg);
-		emit_mem(STW, r, SP, 4 * n);
-		put_reg(r);
-		arg = arg->next;
-		n = n + 1;
-	}
-	gen_branch_sym(AL|L, sym);
-	emit_opi(ADD, SP, SP, 4 * sym->type->len);
 
+	if (sym->flags & SYM_IS_BUILTIN) {
+		fprintf(stderr, "BUILTIN!\n");
+		u32 r = gen_expr(arg);
+		emit_movi(R11, 0xffff0000);
+		emit_mem(STW, r, R11, 0x100 + sym->value * 4);
+		put_reg(r);
+	} else {
+		emit_opi(SUB, SP, SP, 4 * sym->type->len);
+		u32 n = 0;
+		while (arg != nil) {
+			u32 r = gen_expr(arg);
+			emit_mem(STW, r, SP, 4 * n);
+			put_reg(r);
+			arg = arg->next;
+			n = n + 1;
+		}
+		gen_branch_sym(AL|L, sym);
+		emit_opi(ADD, SP, SP, 4 * sym->type->len);
+	}
 	// return is in r0, if it exists
 	return 0;
 }
@@ -293,6 +307,19 @@ u32 gen_expr(Ast node) {
 			error("gen_expr cannot handle binop %s\n", tnames[op]);
 		}
 	} else if (node->kind == AST_UNOP) {
+		u32 op = node->ival;
+		u32 r = gen_expr(node->child);
+		if (op == tMINUS) {
+			emit_movi(R11, 0);
+			emit_op(SUB, r, R11, r);
+		} else if (op == tNOT) {
+			emit_opi(XOR, r, r, 0xffffffff);
+		} else if (op == tBANG) {
+			emit_opi(XOR, r, r, r);
+		} else {
+			error("gen_expr cannot handle unop %s\n", tnames[op]);
+		}
+		return r;
 		error("sorry no unops");
 	} else if (node->kind == AST_CALL) {
 		return gen_call(node);
@@ -342,7 +369,7 @@ void gen_stmt(Ast node) {
 	fprintf(stderr,"gen_stmt()\n");
 	u32 kind = node->kind;
 	if (kind == AST_EXPR) {
-		u32 r = gen_expr(node);
+		u32 r = gen_expr(node->child);
 		put_reg(r);
 	} else if (kind == AST_LOCAL) {
 		if (node->child) {
