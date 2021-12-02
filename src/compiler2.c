@@ -1716,22 +1716,19 @@ Ast parse_function() {
 		symbol_add_global(sym);
 	}
 
-	Ast node = ast_make_simple(AST_FUNC, 0);
-	node->name = fname;
-	node->sym = sym;
-
 	// handle definition if it is one
 	if (isdef) {
-		// patch any forward references
-		//fixup_branches_fwd(obj->fixups);
+		Ast node = ast_make_simple(AST_FUNC, 0);
+		node->name = fname;
+		node->sym = sym;
 
 		// mark as defined and save entry address
 		sym->flags |= SYM_IS_DEFINED;
-		//sym->value = ctx.pc;
 		node->child = parse_function_body(sym);
+		return node;
 	}
 
-	return node;
+	return nil;
 }
 
 Ast parse_type_def() {

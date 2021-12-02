@@ -239,7 +239,7 @@ u32 gen_call(Ast node) {
 		arg = arg->next;
 		n = n + 1;
 	}
-	emit_bi(AL|L, 0); ///XXX
+	gen_branch_sym(AL|L, sym);
 	emit_opi(ADD, SP, SP, 4 * sym->type->len);
 
 	// return is in r0, if it exists
