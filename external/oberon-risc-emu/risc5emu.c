@@ -91,7 +91,8 @@ void risc_single_step(struct RISC *risc) {
     ir = risc->RAM[risc->PC];
   } else {
     fprintf(stderr, "Branched into the void (PC=0x%08X), resetting...\n", risc->PC);
-    risc_reset(risc);
+    exit(-1);
+    //risc_reset(risc);
     return;
   }
 

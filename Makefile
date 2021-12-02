@@ -1,5 +1,7 @@
 
-all: bin/compiler bin/compiler2 bin/fs bin/r5d bin/r5e bin/mkinstab out/test/summary.txt
+all: bin/compiler bin/compiler2 bin/fs bin/r5d bin/r5e bin/mkinstab 
+	
+runtests: out/test/summary.txt
 
 clean:
 	rm -rf bin out
@@ -72,8 +74,19 @@ out/test/%.txt: test/%.src bin/compiler bin/r5d test/runtest.sh
 	@rm -f $@
 	@test/runtest.sh $< $@
 
+out/test2/%.txt: test/%.src test/%.log bin/compiler2 bin/r5d test/runtest.sh
+	@mkdir -p out/test2
+	@rm -f $@
+	@test/runtest2.sh $< $@
+
+out/test2/%.txt: test/%.src bin/compiler2 bin/r5d test/runtest.sh
+	@mkdir -p out/test2
+	@rm -f $@
+	@test/runtest2.sh $< $@
+
 SRCTESTS := $(sort $(wildcard test/*.src))
 ALLTESTS := $(patsubst test/%.src,out/test/%.txt,$(SRCTESTS))
+ALLTESTS += $(patsubst test/%.src,out/test2/%.txt,$(SRCTESTS))
 
 out/test/summary.txt: $(ALLTESTS)
 	@cat $(ALLTESTS) > out/test/summary.txt
