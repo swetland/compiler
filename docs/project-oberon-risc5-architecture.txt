@@ -36,9 +36,9 @@ F0  | 00u0 |   a   |   b   |  op   |             |  0000 |   c   |
 
         4      4       4       4                  16
     +------+-------+-------+-------+-----------------------------+
-F1  | 01uv |   a   |   b   |  op   |               n             |
+F1  | 01uv |   a   |   b   |  op   |               i             |
     +------+-------+-------+-------+-----------------------------+
-    v=0: 0-extend n,  v=1: 1-extend n
+    v=0: n = i,  v=1: n = 0xFFFF0000 | i
 
  0  MOV a, n       Ra = n
  1  LSL a, b, n    Ra = Rb << n    (shift left)
@@ -83,8 +83,8 @@ F2  | 10uv |   a   |   b   |                 off                 |
     +------+-------+-------+-------------------------------------+
     u=0: load, u=1: store   v=0: word, v=1: byte
 
-    LD a, b, off   Ra = Mem[Rb + off]
-    ST a, b, off   Mem[Rb + off] = Ra
+    LD a, b, off   Ra = Mem[Rb + signext32(off)]
+    ST a, b, off   Mem[Rb + signext32(off)] = Ra
 
 3. Branch Instructions (F3)
 ---------------------------
@@ -100,8 +100,8 @@ F3  | 111v |  cond |                    off                      |
 
     B<cond> c       PC = Rc                (low two bits 0'd)
     BL<cond> c      R15 = PC + 4, PC = Rc  (low two bits 0'd)
-    B<cond> off     PC = PC + 4 + off * 4
-    BL<cond> off    R15 = PC + 4, PC = PC + 4 + off * 4
+    B<cond> off     PC = PC + 4 + signext32(off) * 4
+    BL<cond> off    R15 = PC + 4, PC = PC + 4 + signext32(off) * 4
 
 0000 MI negative (minus) N        1000 PL positive          ~N
 0001 EQ equal (zero)     Z        1001 NE not equal         ~Z
