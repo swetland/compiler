@@ -64,22 +64,22 @@ out/risc5ins.h: src/risc5ins.txt bin/mkinstab
 # fail to be compiled by the rule that depends on src+log *or*
 # we fail to depend on the .log for tests with both...
 
-out/test/%.txt: test/%.src test/%.log bin/compiler bin/r5d test/runtest.sh
+out/test/%.txt: test/%.src test/%.log bin/compiler bin/r5e test/runtest.sh
 	@mkdir -p out/test
 	@rm -f $@
 	@test/runtest.sh $< $@
 
-out/test/%.txt: test/%.src bin/compiler bin/r5d test/runtest.sh
+out/test/%.txt: test/%.src bin/compiler bin/r5e test/runtest.sh
 	@mkdir -p out/test
 	@rm -f $@
 	@test/runtest.sh $< $@
 
-out/test2/%.txt: test/%.src test/%.log bin/compiler2 bin/r5d test/runtest.sh
+out/test2/%.txt: test/%.src test/%.log bin/compiler2 bin/r5e test/runtest2.sh
 	@mkdir -p out/test2
 	@rm -f $@
 	@test/runtest2.sh $< $@
 
-out/test2/%.txt: test/%.src bin/compiler2 bin/r5d test/runtest.sh
+out/test2/%.txt: test/%.src bin/compiler2 bin/r5e test/runtest2.sh
 	@mkdir -p out/test2
 	@rm -f $@
 	@test/runtest2.sh $< $@
