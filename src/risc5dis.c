@@ -21,7 +21,7 @@ static char *append_u32(char *buf, int32_t n) {
 
 static const char* regname[16] = {
 	"r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7",
-	"r8", "r9", "r10", "r11", "mt", "sb", "sp", "lr",
+	"r8", "r9", "r10", "r11", "fp", "sb", "sp", "lr",
 };
 #define R(n) regname[(n) & 15]
 

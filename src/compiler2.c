@@ -14,7 +14,7 @@
 #include <unistd.h>
 #include <sys/stat.h>
 
-//#include "risc5.h"
+#include "risc5.h"
 
 // builtin types
 #define nil 0
@@ -44,6 +44,7 @@ typedef struct AstRec AstRec;
 typedef struct TypeRec TypeRec;
 typedef struct SymbolRec SymbolRec;
 typedef struct ScopeRec ScopeRec;
+typedef struct FixupRec FixupRec;
 
 typedef struct StringRec* String;
 typedef struct CtxRec* Ctx;
@@ -51,6 +52,7 @@ typedef struct AstRec* Ast;
 typedef struct TypeRec* Type;
 typedef struct SymbolRec* Symbol;
 typedef struct ScopeRec* Scope;
+typedef struct FixupRec* Fixup;
 
 struct StringRec {
 	String next;
@@ -65,7 +67,7 @@ enum {
 	AST_BINOP,    // EXPR EXPR
 	AST_UNOP,     // EXPR
 	AST_BLOCK,    // STMT*
-	AST_ASSIGN,   // NAME EXPR
+	AST_EXPR,     // EXPR
 	AST_CALL,     // NAME EXPR*
 	AST_WHILE,    // WHILE EXPR BLOCK
 	AST_IF,       // IF EXPR BLOCKthen BLOCKelse
@@ -79,16 +81,15 @@ enum {
 	AST_FUNC,     // BLOCK PARAM*
 	AST_GLOBAL,   // EXPR
 	AST_FIELD,
-	AST_DISCARD,
 	AST_DEREF,
 	AST_INDEX,
 };
 
-str ast_t_names[] = {
-	"NAME", "U32", "STR", "BINOP", "UNOP", "BLOCK", "ASSIGN",
+str ast_kind[AST_INDEX + 1] = {
+	"NAME", "U32", "STR", "BINOP", "UNOP", "BLOCK", "EXPR",
 	"CALL", "WHILE", "IF", "RETURN", "BREAK", "CONTINUE",
 	"LOCAL", "PROGRAM", "TYPEDEF", "ENUMDEF", "FUNCDEF",
-	"GLOBAL", "FIELD", "DISCARD", "DEREF", "INDEX"
+	"GLOBAL", "FIELD", "DEREF", "INDEX"
 };
 
 struct AstRec {
@@ -117,7 +118,7 @@ enum {
 	TYPE_UNDEFINED,
 };
 
-str type_id_tab[TYPE_UNDEFINED + 1] = {
+str type_kind[TYPE_UNDEFINED + 1] = {
 	"void", "bool", "byte", "i32", "nil", "*", "[]", "[]",
 	"struct", "func", "enum", "undef"
 };
@@ -128,7 +129,7 @@ struct TypeRec {
 	Symbol sym;     // if not anonymous
 	Symbol first;   // list of params or fields
 	u32 len;        // array, params
-	u32 size;       // in bytes
+	u32 size;       // in bytes, local stack for funcs
 };
 
 enum {
@@ -141,11 +142,16 @@ enum {
 	SYM_FIELD,
 };
 
+str sym_kind[SYM_FIELD + 1] = {
+	"CONST", "TYPE", "FUNC", "GLOBAL", "LOCAL", "PARAM", "FIELD",
+};
+
 enum {
 	SYM_IS_READ_ONLY = 1,
 	SYM_IS_PUBLIC = 2,
 	SYM_IS_DEFINED = 4,
 	SYM_IS_BUILTIN = 8,
+	SYM_IS_PLACED = 16, // exists at addr in sym->value
 };
 
 struct SymbolRec {
@@ -154,9 +160,9 @@ struct SymbolRec {
 	u32 flags;
 	String name;
 	Type type;
-	Symbol first; // list of?
-
+	Symbol first; // list of fields or params
 	u32 value; // SYM_CONST
+	Fixup fixups; // references from before placement
 };
 
 enum {
@@ -170,6 +176,12 @@ struct ScopeRec {
 	u32 level;
 	u32 save_stack;
 	// Fixup?
+};
+
+
+struct FixupRec {
+	Fixup next;
+	u32 addr;
 };
 
 // ------------------------------------------------------------------
@@ -310,6 +322,7 @@ Symbol symbol_make(symbol_t kind, u32 flags, String name, Type type, u32 value) 
 	s->type = type;
 	s->value = value;
 	s->first = nil;
+	s->fixups = nil;
 	return s;
 }
 
@@ -420,7 +433,7 @@ void type_dump(Type type, bool use_short_name) {
 		}
 		printf("}");
 	} else {
-		printf("%s", type_id_tab[type->kind]);
+		printf("%s", type_kind[type->kind]);
 		if ((type->kind == TYPE_POINTER) || (type->kind == TYPE_SLICE)) {
 			type_dump(type->base, true);
 		}
@@ -495,6 +508,20 @@ void builtin_make(const char* name, u32 id, Type p0, Type p1, Type rtn) {
 		}
 	}
 	symbol_add_global(type->sym);
+}
+
+void fixup_add_list(Fixup list, u32 addr) {
+	Fixup fixup = malloc(sizeof(FixupRec));
+	fixup->next = list->next;
+	fixup->addr = addr;
+	list->next = fixup;
+}
+
+void fixup_add_sym(Symbol sym, u32 addr) {
+	Fixup fixup = malloc(sizeof(FixupRec));
+	fixup->next = sym->fixups;
+	fixup->addr = addr;
+	sym->fixups = fixup;
 }
 
 // ================================================================
@@ -1022,7 +1049,7 @@ i32 ast_get_const_i32(Ast node) {
 			error("unsupported UNOP %s\n", tnames[op]);
 		}
 	} else {
-		error("non-const expr (%s)\n", ast_t_names[node->kind]);
+		error("non-const expr (%s)\n", ast_kind[node->kind]);
 	}
 	return 0;
 }
@@ -1527,7 +1554,7 @@ Ast parse_expr_statement() {
 		node = ast_make_unop(ctx.tok, left);
 		next();
 	} else {
-		node = ast_make_simple(AST_DISCARD, 0);
+		node = ast_make_simple(AST_EXPR, 0);
 		node->child = left;
 	}
 	require(tSEMI);
@@ -1590,13 +1617,14 @@ Ast parse_function_body(Symbol fn) {
 	node->sym = scope_pop();
 	scope_pop();
 	ctx.fn = nil;
+	fn->type->size = ctx.local_stack;
 	return node;
 }
 
 Symbol parse_param(String fname, u32 n, Symbol first, Symbol last) {
 	String pname = parse_name("parameter name");
 	Type ptype = parse_type(false);
-	Symbol param = symbol_make(SYM_PARAM, 0, pname, ptype, 4 + n * 4);
+	Symbol param = symbol_make(SYM_PARAM, 0, pname, ptype, /* 4 + */ n * 4);
 
 	Symbol sym = first;
 	while (sym != nil) {
@@ -1680,10 +1708,11 @@ Ast parse_function() {
 	} else {
 		// if there was no existing record of this function, create one now
 		Type type = type_make(TYPE_FUNC, rettype, n, 0);
-		type->first = first;
 		sym = symbol_make(SYM_FUNC, 0, fname, type, 0);
 		sym->first = first;
+		type->first = first;
 		type->sym = sym;
+		type->len = n; // parameter count
 		symbol_add_global(sym);
 	}
 
@@ -1819,7 +1848,7 @@ void ast_dump_rtype(Symbol sym, u32 indent) {
 void ast_dump(Ast node, u32 indent) {
 	u32 i = 0;
 	while (i < indent) { printf("  "); i++; }
-	printf("%s ", ast_t_names[node->kind]);
+	printf("%s ", ast_kind[node->kind]);
 	if (node->kind == AST_NAME) {
 		printf("'%s'\n", node->name->text);
 	} else if ((node->kind == AST_BINOP) || (node->kind == AST_UNOP)) {
@@ -1862,6 +1891,8 @@ void ast_dump(Ast node, u32 indent) {
 	}
 }
 
+#include "codegen-risc5-simple.c"
+
 #if 0
 void type_dump_all() {
 	Symbol sym = ctx.typetab;
@@ -1877,6 +1908,58 @@ void type_dump_all() {
 	}
 }
 #endif
+
+// ================================================================
+
+void listing_write(const char* listfn, const char* srcfn) {
+	FILE* fin = fopen(srcfn, "r");
+	if (fin == NULL) {
+		error("cannot re-read '%s'\n", srcfn);
+	}
+	FILE* fout = fopen(listfn, "w");
+	if (fout == NULL) {
+		error("cannot write '%s'\n", listfn);
+	}
+	u32 n = 0;
+	u32 line = 1;
+	char buf[1024];
+	while (n < ctx.pc) {
+		u32 ins = ctx.code[n/4];
+#if 0
+		if ((line < ctx.xref[n/4]) && fin) {
+			fprintf(fout, "\n");
+			while (line < ctx.xref[n/4]) {
+				if (fgets(buf, sizeof(buf), fin) == nil) {
+					fin = nil;
+					break;
+				}
+				u32 i = 0;
+				while (buf[i] != 0) {
+					if (buf[i] > ' ') {
+						fprintf(fout,"%s", buf);
+						break;
+					}
+					i++;
+				}
+				line++;
+			}
+			fprintf(fout, "\n");
+		}
+#endif
+		risc5dis(n, ins, buf);
+		fprintf(fout, "%08x: %08x  %s\n", n, ins, buf);
+		n += 4;
+	}
+	n = 0;
+	while (n < ctx.gp) {
+		fprintf(fout, "%08x: %08x\n", ctx.pc + n, ctx.data[n >> 2]);
+		n += 4;
+	}
+	fclose(fout);
+	if (fin) {
+		fclose(fin);
+	}
+}
 
 // ================================================================
 
@@ -1927,7 +2010,16 @@ i32 main(int argc, args argv) {
 	}
 
 	if (srcname == nil) {
-		error("no file specified");
+		printf(
+"usage:    compiler [ <option> | <sourcefilename> ]*\n"
+"\n"
+"options:  -o <filename>    binary output (default 'out.bin')\n"
+"          -l <filename>    listing output (default none)\n"
+"          -v               trace code generation\n"
+"          -s               scan only\n"
+"          -p               dump type context\n"
+"          -A               abort on error\n");
+		return 0;
 	}
 	ctx.filename = srcname;
 
@@ -1952,6 +2044,12 @@ i32 main(int argc, args argv) {
 	Ast a = parse_program();
 
 	ast_dump(a, 0);
+
+	gen_risc5_simple(a);
+
+	if (lstname != nil) {
+		listing_write(lstname, ctx.filename);
+	}
 
 	//type_dump_all();
 

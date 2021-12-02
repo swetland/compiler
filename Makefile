@@ -22,9 +22,9 @@ bin/compiler: src/compiler.c src/risc5dis.c out/risc5ins.h
 	@mkdir -p bin
 	$(CC) -o $@ $(CFLAGS) -Wno-unused-result -DC src/compiler.c src/risc5dis.c
 
-bin/compiler2: src/compiler2.c
+bin/compiler2: src/compiler2.c src/codegen-risc5-simple.c src/risc5dis.c out/risc5ins.h
 	@mkdir -p bin
-	$(CC) -o $@ $(CFLAGS) -Wno-unused-result -DC src/compiler2.c
+	$(CC) -o $@ $(CFLAGS) -Wno-unused-result -DC src/compiler2.c src/risc5dis.c
 
 bin/rewriter: src/rewriter.c
 	@mkdir -p bin
