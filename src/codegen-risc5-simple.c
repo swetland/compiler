@@ -146,7 +146,7 @@ u32 mul_op_to_ins_tab[7] = { MUL, DIV, MOD, AND, ANN, LSL, ASR };
 
 // ------------------------------------------------------------------
 
-void gen_branch_back(u32 op, u32 addr) {
+void gen_branch(u32 op, u32 addr) {
 	emit_bi(op, (addr - ctx.pc - 4) >> 2);
 }
 
@@ -157,7 +157,7 @@ void gen_branch_fwd(u32 op, Fixup list) {
 
 void gen_branch_sym(u32 op, Symbol sym) {
 	if (sym->flags & SYM_IS_PLACED) {
-		gen_branch_back(op, sym->value);
+		gen_branch(op, sym->value);
 	} else {
 		fixup_add_sym(sym, ctx.pc);
 		emit_bi(op, 0);
@@ -203,6 +203,9 @@ u32 loop_continue = 0;
 Fixup loop_exit = nil;
 Fixup func_exit = nil;
 
+void gen_trace(str msg) {
+}
+
 void gen_block(Ast node);
 u32 gen_expr(Ast node);
 
@@ -222,7 +225,7 @@ void sym_get_loc(Symbol sym, u32* base, i32* offset) {
 }
 
 u32 gen_assign(Symbol sym, Ast expr) {
-	fprintf(stderr,"gen_assign()\n");
+	gen_trace("gen_assign()\n");
 	u32 base;
 	i32 offset;
 	sym_get_loc(sym, &base, &offset);
@@ -233,17 +236,16 @@ u32 gen_assign(Symbol sym, Ast expr) {
 }
 
 u32 gen_call(Ast node) {
-	fprintf(stderr,"gen_call()\n");
+	gen_trace("gen_call()\n");
 	Symbol sym = node->child->sym;
 	Ast arg = node->child->next;
 
 	if (sym->flags & SYM_IS_BUILTIN) {
-		fprintf(stderr, "BUILTIN!\n");
 		u32 r = gen_expr(arg);
 		emit_movi(R11, 0xffff0000);
 		emit_mem(STW, r, R11, 0x100 + sym->value * 4);
 		put_reg(r);
-	} else {
+	} else if (sym->type->len > 0) {
 		emit_opi(SUB, SP, SP, 4 * sym->type->len);
 		u32 n = 0;
 		while (arg != nil) {
@@ -255,6 +257,9 @@ u32 gen_call(Ast node) {
 		}
 		gen_branch_sym(AL|L, sym);
 		emit_opi(ADD, SP, SP, 4 * sym->type->len);
+	} else {
+		// no args
+		gen_branch_sym(AL|L, sym);
 	}
 	// return is in r0, if it exists
 	return 0;
@@ -265,7 +270,7 @@ u32 gen_lexpr(Ast node) {
 }
 
 u32 gen_binop(Ast node, u32 op) {
-	fprintf(stderr, "gen_binop()\n");
+	gen_trace( "gen_binop()\n");
 	u32 left = gen_expr(node->child);
 	u32 right = gen_expr(node->child->next);
 	u32 res = get_reg_tmp();
@@ -275,18 +280,37 @@ u32 gen_binop(Ast node, u32 op) {
 	return res;
 }
 
+u32 gen_relop(Ast node, u32 cc) {
+	gen_trace("gen_relop()\n");
+	u32 left = gen_expr(node->child);
+	u32 right = gen_expr(node->child->next);
+	u32 res = get_reg_tmp();
+	emit_movi(res, 1);
+	emit_op(SUB, left, left, right);
+	gen_branch(cc, ctx.pc + 8);
+	emit_movi(res, 0);
+	put_reg(left);
+	put_reg(right);
+	return res;
+}
+
 u32 gen_expr(Ast node) {
-	fprintf(stderr,"gen_expr()\n");
+	gen_trace("gen_expr()\n");
 	if (node->kind == AST_U32) {
 		u32 r = get_reg_tmp();
 		emit_movi(r, node->ival);
 		return r;
 	} else if (node->kind == AST_NAME) {
-		u32 base;
-		i32 offset;
-		sym_get_loc(node->sym, &base, &offset);
 		u32 r = get_reg_tmp();
-		emit_mem(LDW, r, base, offset);
+		// XXX type checking here or before
+		if (node->sym->kind == SYM_CONST) {
+			emit_movi(r, node->sym->value);
+		} else {
+			u32 base;
+			i32 offset;
+			sym_get_loc(node->sym, &base, &offset);
+			emit_mem(LDW, r, base, offset);
+		}
 		return r;
 	} else if (node->kind == AST_BINOP) {
 		u32 op = node->ival;
@@ -296,13 +320,11 @@ u32 gen_expr(Ast node) {
 			}
 			return gen_assign(node->child->sym, node->child->next);
 		} else if ((op & tcMASK) == tcRELOP) {
-			error("sorry");
+			return gen_relop(node, rel_op_to_cc_tab[op - tEQ]);
 		} else if ((op & tcMASK) == tcADDOP) {
-			op = add_op_to_ins_tab[op - tPLUS];
-			return gen_binop(node, op);
+			return gen_binop(node, add_op_to_ins_tab[op - tPLUS]);
 		} else if ((op & tcMASK) == tcMULOP) {
-			op = mul_op_to_ins_tab[op - tSTAR];
-			return gen_binop(node, op);
+			return gen_binop(node, mul_op_to_ins_tab[op - tSTAR]);
 		} else {
 			error("gen_expr cannot handle binop %s\n", tnames[op]);
 		}
@@ -366,7 +388,7 @@ void gen_if_else(Ast node) {
 }
 
 void gen_stmt(Ast node) {
-	fprintf(stderr,"gen_stmt()\n");
+	gen_trace("gen_stmt()\n");
 	u32 kind = node->kind;
 	if (kind == AST_EXPR) {
 		u32 r = gen_expr(node->child);
@@ -390,14 +412,14 @@ void gen_stmt(Ast node) {
 	} else if (kind == AST_BREAK) {
 		gen_branch_fwd(AL, loop_exit);
 	} else if (kind == AST_CONTINUE) {
-		gen_branch_back(AL, loop_continue);
+		gen_branch(AL, loop_continue);
 	} else {
 		error("gen_stmt cannot handle %s\n", ast_kind[kind]);
 	}
 }
 
 void gen_block(Ast node) {
-	fprintf(stderr,"gen_block()\n");
+	gen_trace("gen_block()\n");
 	node = node->child;
 	while (node != nil) {
 		gen_stmt(node);
@@ -427,7 +449,7 @@ void gen_block(Ast node) {
 //                  SP -> locn
 
 void gen_func(Ast node) {
-	fprintf(stderr,"gen_func()\n");
+	gen_trace("gen_func()\n");
 
 	// local space plus saved lr and fp
 	u32 x = node->sym->type->size + 8;
@@ -464,7 +486,7 @@ void gen_func(Ast node) {
 }
 
 void gen_risc5_simple(Ast node) {
-	fprintf(stderr, "gen_risc5_simple()\n");
+	gen_trace( "gen_risc5_simple()\n");
 
 	emit_movi(SB, 0); // placeholder SB load
 	emit_bi(AL, 0);  // placeholder branch to init
