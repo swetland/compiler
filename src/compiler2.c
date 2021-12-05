@@ -1552,14 +1552,18 @@ Ast parse_expr_statement() {
 		right = parse_expr();
 		node = ast_make_binop(op, left, right);
 	} else if ((ctx.tok == tINC) || (ctx.tok == tDEC)) {
-		node = ast_make_unop(ctx.tok, left);
 		next();
+		error("inc/dec unsupported");
 	} else {
-		node = ast_make_simple(AST_EXPR, 0);
-		node->child = left;
+		node = left;
 	}
 	require(tSEMI);
-	return node;
+
+	// wrap in a statement node
+	Ast stmt = ast_make_simple(AST_EXPR, 0);
+	stmt->child = node;
+
+	return stmt;
 }
 
 Ast parse_block() {
@@ -1987,8 +1991,10 @@ i32 main(int argc, args argv) {
 	str outname = "out.bin";
 	str lstname = nil;
 	str srcname = nil;
+	str astname = nil;
 	bool dump = false;
 	bool scan_only = false;
+	bool astdump = false;
 
 	ctx_init();
 	ctx.filename = "<commandline>";
@@ -2008,6 +2014,8 @@ i32 main(int argc, args argv) {
 			lstname = argv[2];
 			argc--;
 			argv++;
+		} else if (!strcmp(argv[1], "-a")) {
+			astdump = true;
 		} else if (!strcmp(argv[1], "-p")) {
 			dump = true;
 		} else if (!strcmp(argv[1], "-v")) {
@@ -2035,6 +2043,7 @@ i32 main(int argc, args argv) {
 "\n"
 "options:  -o <filename>    binary output (default 'out.bin')\n"
 "          -l <filename>    listing output (default none)\n"
+"          -a               dump AST tree\n"
 "          -v               trace code generation\n"
 "          -s               scan only\n"
 "          -p               dump type context\n"
@@ -2063,7 +2072,9 @@ i32 main(int argc, args argv) {
 
 	Ast a = parse_program();
 
-	ast_dump(a, 0);
+	if (astdump) {
+		ast_dump(a, 0);
+	}
 
 	gen_risc5_simple(a);
 
