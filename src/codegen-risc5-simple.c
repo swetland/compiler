@@ -362,12 +362,14 @@ void gen_while(Ast node) {
 
 	loop_continue = ctx.pc;
 	u32 r = gen_expr(node->child);
-	put_reg(r);
 
-	// XXX flow
+	emit_mov(R11, r); // set z flag
+	put_reg(r);
+	gen_branch_fwd(EQ, &list);
 
 	gen_block(node->child->next);
-	emit_br(AL, loop_continue);
+
+	gen_branch(AL, loop_continue);
 
 	// patch breaks
 	fixup_branches_fwd(loop_exit->next);
