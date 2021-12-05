@@ -39,7 +39,7 @@ int main(int argc, char** argv) {
 		return -1;
 	}
 
-	risc_t *r = risc_new(trace);
+	risc_t *r = risc_new(false);
 
 	// load image
 	int fd = open(fn, O_RDONLY);
@@ -59,18 +59,21 @@ int main(int argc, char** argv) {
 
 	// exit shim
 	sp -= 16;
-	risc_store_word(r, sp+0, 0x51000000); // mov r1, 0xffff0000
-	risc_store_word(r, sp+4, 0xa0100100); // stw r0, [r1, 256]
-	risc_store_word(r, sp+8, 0xe7ffffff); // b .
+	uint32_t lr = sp;
+	risc_store_word(r, lr+0, 0x51000000); // mov r1, 0xffff0000
+	risc_store_word(r, lr+4, 0xa0100100); // stw r0, [r1, 256]
+	risc_store_word(r, lr+8, 0xe7ffffff); // b .
 	// point LR at shim
-	risc_set_register(r, 15, sp);
+	risc_set_register(r, 15, lr);
 
 	// r0/r1 is an [][]byte of commandline args
+	uint32_t r0 = 0;
+	uint32_t r1 = 0;
 	if (args) {
 		sp -= args * 8;
 		uint32_t p = sp;
-		risc_set_register(r, 0, p);
-		risc_set_register(r, 1, args);
+		r0 = p;
+		r1 = args;
 		while (args > 0) {
 			fprintf(stderr, "E %s\n", argv[0]);
 			uint32_t n = strlen(argv[0]);
@@ -84,13 +87,20 @@ int main(int argc, char** argv) {
 			args--;
 			argv++;
 		}
-	} else {
-		risc_set_register(r, 0, 0);
-		risc_set_register(r, 1, 0);
 	}
+	risc_set_register(r, 0, r0);
+	risc_set_register(r, 1, r1);
 
 	// set SP
 	risc_set_register(r, 14, sp);
+
+	if (trace) {
+		risc_trace(r, true);
+		printf("                    SP = %08x\n", sp);
+		printf("                    LR = %08x (exit shim)\n", lr);
+		printf("                    R0 = %08x **argv\n", r0);
+		printf("                    R1 = %08x argc\n", r1);
+	}
 
 	do {
 		risc_run(r, 100000000);

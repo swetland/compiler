@@ -8,6 +8,7 @@ struct RISC *risc_new(bool trace);
 
 void risc_reset(struct RISC *risc);
 void risc_run(struct RISC *risc, int cycles);
+void risc_trace(struct RISC *risc, bool trace);
 
 void risc_single_step(struct RISC *risc);
 void risc_set_register(struct RISC *risc, int reg, uint32_t value);

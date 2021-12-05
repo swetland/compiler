@@ -71,6 +71,10 @@ struct RISC *risc_new(bool trace) {
   return risc;
 }
 
+void risc_trace(struct RISC *risc, bool trace) {
+  risc->TRACE = trace;
+}
+
 void risc_reset(struct RISC *risc) {
   risc->PC = 0;
 }
