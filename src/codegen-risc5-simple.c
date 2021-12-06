@@ -359,6 +359,50 @@ u32 gen_relop(Ast node, u32 cc) {
 	return res;
 }
 
+u32 gen_or_op(Ast node, u32 op) {
+	u32 r = gen_expr(node->c0);
+	emit_mov(R11, r); // set z flag
+	put_reg(r);
+	u32 l0_br_true = ctx.pc;
+	emit_bi(NE, 0);
+	r = gen_expr(node->c1);
+	emit_mov(R11, r); // set z flag
+	put_reg(r);
+	u32 l1_br_true = ctx.pc;
+	emit_bi(NE, 0);
+	r = get_reg_tmp();
+	emit_movi(r, 0);
+	u32 l2_br_exit = ctx.pc;
+	emit_bi(AL, 0);
+	fixup_branch_fwd(l0_br_true);
+	fixup_branch_fwd(l1_br_true);
+	emit_movi(r, 1);
+	fixup_branch_fwd(l2_br_exit);
+	return r;
+}
+
+u32 gen_and_op(Ast node, u32 op) {
+	u32 r = gen_expr(node->c0);
+	emit_mov(R11, r); // set z flag
+	put_reg(r);
+	u32 l0_br_false = ctx.pc;
+	emit_bi(EQ, 0);
+	r = gen_expr(node->c1);
+	emit_mov(R11, r); // set z flag
+	put_reg(r);
+	u32 l1_br_false = ctx.pc;
+	emit_bi(EQ, 0);
+	r = get_reg_tmp();
+	emit_movi(r, 1);
+	u32 l2_br_exit = ctx.pc;
+	emit_bi(AL, 0);
+	fixup_branch_fwd(l0_br_false);
+	fixup_branch_fwd(l1_br_false);
+	emit_movi(r, 0);
+	fixup_branch_fwd(l2_br_exit);
+	return r;
+}
+
 u32 gen_expr(Ast node) {
 	err_ast = node;
 	gen_src_xref(node);
@@ -392,6 +436,10 @@ u32 gen_expr(Ast node) {
 			return gen_binop(node, add_op_to_ins_tab[op - tPLUS]);
 		} else if ((op & tcMASK) == tcMULOP) {
 			return gen_binop(node, mul_op_to_ins_tab[op - tSTAR]);
+		} else if (op == tOR) {
+			return gen_or_op(node, op);
+		} else if (op == tAND) {
+			return gen_and_op(node, op);
 		} else {
 			error("gen_expr cannot handle binop %s\n", tnames[op]);
 		}
