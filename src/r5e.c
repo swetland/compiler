@@ -35,7 +35,14 @@ int main(int argc, char** argv) {
 	}
 
 	if (fn == NULL) {
-		fprintf(stderr, "r5e: no image specified\n");
+		fprintf(stderr,
+"usage: r5e <options>* <binary> [ -- <arg>* ]\n"
+"\n"
+"options:   -n    no cycle limit (run forever)\n"
+"           -t    trace execution\n"
+"\n"
+"args:      passed on to emulated program\n"
+);
 		return -1;
 	}
 
