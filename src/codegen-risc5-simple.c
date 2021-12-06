@@ -441,6 +441,10 @@ void gen_while(Ast node) {
 }
 
 void gen_if_else(Ast node) {
+	// fixups for jumps to the very end
+	FixupRec if_exit;
+	if_exit.next = nil;
+
 	gen_trace("gen_if()");
 	// IF contains one or more IFELSE nodes
 	node = node->c0;
@@ -458,6 +462,10 @@ void gen_if_else(Ast node) {
 
 	node = node->c2;
 	while (node != nil) {
+		// jump from end of 'then' block to end
+		gen_branch_fwd(EQ, &if_exit);
+
+		// patch false jump (over 'then' block) to here
 		fixup_branch_fwd(l0_br_false);
 
 		if (node->kind == AST_IFELSE) { // ifelse ...
@@ -472,11 +480,18 @@ void gen_if_else(Ast node) {
 		} else { // else ...
 			gen_trace("gen_else()");
 			gen_block(node);
+
+			// done, patch up earlier jumps to exit
+			fixup_branches_fwd(if_exit.next);
 			return;
 		}
 	}
 
+	// patch false jump (over previous 'then' block) to here
 	fixup_branch_fwd(l0_br_false);
+
+	// done, patch up earlier jumps to exit
+	fixup_branches_fwd(if_exit.next);
 }
 
 void gen_block(Ast node);
