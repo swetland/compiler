@@ -110,6 +110,8 @@ struct AstRec {
 	String name;
 	Symbol sym;
 	Type type;
+
+	u32 srcloc; // linenumber for now
 };
 
 enum {
@@ -256,6 +258,7 @@ struct CtxRec {
 
 	u32 code[8192];
 	u32 data[8192];
+	u32 xref[8192];
 };
 
 CtxRec ctx;
@@ -294,6 +297,7 @@ Ast ast_make(ast_t kind, u32 ival, String name, Symbol sym, Type type) {
 	a->name = name;
 	a->sym = sym;
 	a->type = type;
+	a->srcloc = ctx.linenumber;
 	return a;
 }
 
@@ -1541,6 +1545,8 @@ Ast parse_global_var() {
 }
 
 Ast parse_expr_statement() {
+	u32 srcloc = ctx.linenumber;
+
 	Ast node = nil;
 	Ast left = parse_expr();
 	Ast right = nil;
@@ -1577,6 +1583,7 @@ Ast parse_expr_statement() {
 	// wrap in a statement node
 	Ast stmt = ast_make_simple(AST_EXPR, 0);
 	stmt->c0 = node;
+	stmt->srcloc = srcloc;
 
 	return stmt;
 }
@@ -1983,7 +1990,7 @@ void listing_write(const char* listfn, const char* srcfn) {
 	char buf[1024];
 	while (n < ctx.pc) {
 		u32 ins = ctx.code[n/4];
-#if 0
+#if 1
 		if ((line < ctx.xref[n/4]) && fin) {
 			fprintf(fout, "\n");
 			while (line < ctx.xref[n/4]) {

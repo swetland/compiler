@@ -220,6 +220,10 @@ void gen_trace(str msg) {
 //	fprintf(stderr, "%p %p %s\n", err_last_func, err_ast, msg);
 }
 
+void gen_src_xref(Ast node) {
+	ctx.xref[ctx.pc/4] = node->srcloc;
+}
+
 void dump_error_ctxt() {
 	fprintf(stderr, "\n");
 	if (err_last_func) {
@@ -286,6 +290,7 @@ void reg_restore(u32 base, u32 mask) {
 }
 
 u32 gen_call(Ast node) {
+	gen_src_xref(node);
 	gen_trace("gen_call()");
 	Symbol sym = node->c0->sym;
 	Ast arg = node->c2;
@@ -356,6 +361,7 @@ u32 gen_relop(Ast node, u32 cc) {
 
 u32 gen_expr(Ast node) {
 	err_ast = node;
+	gen_src_xref(node);
 	gen_trace("gen_expr()");
 	if (node->kind == AST_U32) {
 		u32 r = get_reg_tmp();
@@ -463,7 +469,7 @@ void gen_if_else(Ast node) {
 	node = node->c2;
 	while (node != nil) {
 		// jump from end of 'then' block to end
-		gen_branch_fwd(EQ, &if_exit);
+		gen_branch_fwd(AL, &if_exit);
 
 		// patch false jump (over 'then' block) to here
 		fixup_branch_fwd(l0_br_false);
@@ -498,6 +504,7 @@ void gen_block(Ast node);
 
 void gen_stmt(Ast node) {
 	err_ast = node;
+	gen_src_xref(node);
 	gen_trace("gen_stmt()\n");
 	u32 kind = node->kind;
 	if (kind == AST_EXPR) {
@@ -532,6 +539,7 @@ void gen_stmt(Ast node) {
 
 void gen_block(Ast node) {
 	gen_trace("gen_block()\n");
+	gen_src_xref(node);
 	node = node->c2;
 	while (node != nil) {
 		gen_stmt(node);
@@ -563,6 +571,8 @@ void gen_block(Ast node) {
 void gen_func(Ast node) {
 	err_last_func = node;
 	err_ast = node;
+
+	gen_src_xref(node);
 	gen_trace("gen_func()\n");
 
 	// local space plus saved lr and fp
