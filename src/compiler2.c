@@ -64,22 +64,22 @@ enum {
 	AST_NAME,
 	AST_U32,
 	AST_STRING,
-	AST_BINOP,    // EXPR EXPR
-	AST_UNOP,     // EXPR
-	AST_BLOCK,    // STMT*
-	AST_EXPR,     // EXPR
-	AST_CALL,     // NAME EXPR*
-	AST_WHILE,    // WHILE EXPR BLOCK
-	AST_IF,       // IF EXPR BLOCKthen BLOCKelse
-	AST_RETURN,   // EXPR
+	AST_BINOP,    // c0=EXPR c1=EXPR
+	AST_UNOP,     // c0=EXPR
+	AST_BLOCK,    // c0=STMT
+	AST_EXPR,     // c0=EXPR
+	AST_CALL,     // c0=NAME c2=EXPR*
+	AST_WHILE,    // c0=EXPR c1=BLOCK
+	AST_IF,       // c0=EXPR c1=BLOCKthen c2=BLOCKelse
+	AST_RETURN,   // c0=EXPR
 	AST_BREAK,
 	AST_CONTINUE,
-	AST_LOCAL,    // NAME EXPR
-	AST_PROGRAM,  // (TYPEDEF | ENUMDEF | FUNC | GLOBAL)*
+	AST_LOCAL,    // c0=NAME c1=EXPR?
+	AST_PROGRAM,  // c2=(TYPEDEF | ENUMDEF | FUNC | GLOBAL)*
 	AST_TYPEDEF,
-	AST_ENUMDEF,  // FIELD*
-	AST_FUNC,     // BLOCK PARAM*
-	AST_GLOBAL,   // EXPR
+	AST_ENUMDEF,  // c2=FIELD*
+	AST_FUNC,     // c0=BLOCK
+	AST_GLOBAL,   // c0=EXPR
 	AST_FIELD,
 	AST_DEREF,
 	AST_INDEX,
@@ -94,8 +94,9 @@ str ast_kind[AST_INDEX + 1] = {
 
 struct AstRec {
 	ast_t kind;
-	Ast child;
-	Ast next;
+	Ast c0; // left
+	Ast c1; // right
+	Ast c2; // third or listhead (chained on c2 fields)
 
 	u32 ival;
 	String name;
@@ -278,8 +279,9 @@ String string_make(const char* text, u32 len) {
 Ast ast_make(ast_t kind, u32 ival, String name, Symbol sym, Type type) {
 	Ast a = malloc(sizeof(AstRec));
 	a->kind = kind;
-	a->child = nil;
-	a->next = nil;
+	a->c0 = nil;
+	a->c1 = nil;
+	a->c2 = nil;
 	a->ival = ival;
 	a->name = name;
 	a->sym = sym;
@@ -289,14 +291,14 @@ Ast ast_make(ast_t kind, u32 ival, String name, Symbol sym, Type type) {
 
 Ast ast_make_binop(u32 op, Ast left, Ast right) {
 	Ast node = ast_make(AST_BINOP, op, nil, nil, nil);
-	node->child = left;
-	left->next = right;
+	node->c0 = left;
+	node->c1 = right;
 	return node;
 }
 
 Ast ast_make_unop(u32 op, Ast child) {
 	Ast node = ast_make(AST_UNOP, op, nil, nil, nil);
-	node->child = child;
+	node->c0 = child;
 	return node;
 }
 
@@ -1017,8 +1019,8 @@ i32 ast_get_const_i32(Ast node) {
 		}
 		return node->sym->value;
 	} else if (node->kind == AST_BINOP) {
-		i32 left = ast_get_const_i32(node->child);
-		i32 right = ast_get_const_i32(node->child->next);
+		i32 left = ast_get_const_i32(node->c0);
+		i32 right = ast_get_const_i32(node->c1);
 		u32 op = node->ival;
 		if (op == tPLUS) {
 			return left + right;
@@ -1035,10 +1037,10 @@ i32 ast_get_const_i32(Ast node) {
 		} else if (op == tPIPE) {
 			return left | right;
 		} else {
-			error("unsupported BINOP %s\n", tnames[op]);
+			error("unsupported const BINOP %s\n", tnames[op]);
 		}
 	} else if (node->kind == AST_UNOP) {
-		i32 left = ast_get_const_i32(node->child);
+		i32 left = ast_get_const_i32(node->c0);
 		u32 op = node->ival;
 		if (op == tPLUS) {
 			return left;
@@ -1047,7 +1049,7 @@ i32 ast_get_const_i32(Ast node) {
 		} else if (op == tBANG) {
 			return !left;
 		} else {
-			error("unsupported UNOP %s\n", tnames[op]);
+			error("unsupported const UNOP %s\n", tnames[op]);
 		}
 	} else {
 		error("non-const expr (%s)\n", ast_kind[node->kind]);
@@ -1108,12 +1110,13 @@ Ast parse_primary_expr() {
 			u32 n = 0;
 
 			Ast call = ast_make_simple(AST_CALL, 0);
-			call->child = node;
+			call->c0 = node;
+			Ast last = call;
 
 			while (ctx.tok != tCPAREN) {
 				Ast param = parse_expr();
-				node->next = param;
-				node = param;
+				last->c2 = param;
+				last = param;
 				if (ctx.tok != tCPAREN) {
 					require(tCOMMA);
 				}
@@ -1128,14 +1131,14 @@ Ast parse_primary_expr() {
 			// VALIDATE appropriate name for type
 			// VALIDATE type is ptr or struct
 			Ast dot = ast_make_simple(AST_DEREF, 0);
-			dot->child = node;
+			dot->c0 = node;
 			dot->name = name;
 			node = dot;
 		} else if (ctx.tok == tOBRACK) {
 			next();
 			Ast index = ast_make_simple(AST_INDEX, 0);
-			index->child = node;
-			index->child->next = parse_expr();
+			index->c0 = node;
+			index->c1 = parse_expr();
 			node = index;
 			require(tCBRACK);
 			//VALIDATE lhs is array, rhs is appropriate numeric
@@ -1317,8 +1320,8 @@ Ast parse_while() {
 	Ast block = parse_block();
 	block->sym = scope_pop();
 	Ast node = ast_make_simple(AST_WHILE, 0);
-	node->child = expr;
-	expr->next = block;
+	node->c0 = expr;
+	node->c1 = block;
 	return node;
 }
 
@@ -1330,8 +1333,8 @@ Ast parse_if() {
 	Ast block = parse_block();
 	block->sym = scope_pop();
 	Ast ifnode = ast_make_simple(AST_IF, 0);
-	ifnode->child = expr;
-	expr->next = block;
+	ifnode->c0 = expr;
+	ifnode->c1 = block;
 	Ast last = block;
 	while (ctx.tok == tELSE) {
 		next();
@@ -1345,8 +1348,8 @@ Ast parse_if() {
 			Ast block = parse_block();
 			block->sym = scope_pop();
 
-			last->next = expr;
-			expr->next = block;
+			last->c2 = expr;
+			expr->c2 = block;
 			last = block;
 		} else {
 			// generate "else" code
@@ -1354,7 +1357,7 @@ Ast parse_if() {
 			scope_push(SCOPE_BLOCK, nil);
 			Ast block = parse_block();
 			block->sym = scope_pop();
-
+			last->c2 = block;
 			last = block;
 			break;
 		}
@@ -1374,7 +1377,7 @@ Ast parse_return() {
 		next();
 		//x.type = ctx.type_void;
 	} else {
-		node->child = parse_expr();
+		node->c0 = parse_expr();
 		//if (!compatible_type(ctx.fn->type->base, x.type, &x)) {
 		//	error("return types do not match");
 		//}
@@ -1485,7 +1488,7 @@ Ast parse_local_var() {
 
 	if (ctx.tok == tASSIGN) {
 		next();
-		node->child = parse_expr();
+		node->c0 = parse_expr();
 	}
 	require(tSEMI);
 
@@ -1521,7 +1524,7 @@ Ast parse_global_var() {
 		} else {
 			Ast expr = parse_expr();
 			i32 v = ast_get_const_i32(expr);
-			node->child = expr;
+			node->c0 = expr;
 			// VALIDATE compatible integer type
 			ctx.data[sym->value >> 2] = v;
 		}
@@ -1552,8 +1555,16 @@ Ast parse_expr_statement() {
 		right = parse_expr();
 		node = ast_make_binop(op, left, right);
 	} else if ((ctx.tok == tINC) || (ctx.tok == tDEC)) {
+		u32 op;
+		if (ctx.tok == tINC) {
+			op = tPLUS;
+		} else {
+			op = tMINUS;
+		}
 		next();
-		error("inc/dec unsupported");
+		right = ast_make_const(AST_U32, 1, ctx.type_i32);
+		right = ast_make_binop(op, left, right);
+		node = ast_make_binop(tASSIGN, left, right);
 	} else {
 		node = left;
 	}
@@ -1561,14 +1572,14 @@ Ast parse_expr_statement() {
 
 	// wrap in a statement node
 	Ast stmt = ast_make_simple(AST_EXPR, 0);
-	stmt->child = node;
+	stmt->c0 = node;
 
 	return stmt;
 }
 
 Ast parse_block() {
 	Ast block = ast_make_simple(AST_BLOCK, 0);
-	Ast last = nil;
+	Ast last = block;
 	Ast node;
 	while (true) {
 		if (ctx.tok == tCBRACE) {
@@ -1601,11 +1612,7 @@ Ast parse_block() {
 		}
 
 		// append to block's list of statements
-		if (last == nil) {
-			block->child = node;
-		} else {
-			last->next = node;
-		}
+		last->c2 = node;
 		last = node;
 	}
 	return block;
@@ -1729,7 +1736,7 @@ Ast parse_function() {
 
 		// mark as defined and save entry address
 		sym->flags |= SYM_IS_DEFINED;
-		node->child = parse_function_body(sym);
+		node->c0 = parse_function_body(sym);
 		return node;
 	}
 
@@ -1764,7 +1771,7 @@ Ast parse_type_def() {
 
 Ast parse_enum_def() {
 	Ast decl = ast_make_simple(AST_ENUMDEF, 0);
-	Ast last = nil;
+	Ast last = decl;
 
 	require(tOBRACE);
 	u32 val = 0;
@@ -1782,11 +1789,7 @@ Ast parse_enum_def() {
 		}
 		require(tCOMMA);
 		Ast node = ast_make(AST_FIELD, val, name, sym, ctx.type_i32);
-		if (last == nil) {
-			decl->child = node;
-		} else {
-			last->next = node;
-		}
+		last->c2 = node;
 		last = node;
 		symbol_add_global(symbol_make(SYM_CONST, 0, name, ctx.type_i32, val));
 		val++;
@@ -1798,33 +1801,31 @@ Ast parse_enum_def() {
 
 Ast parse_program() {
 	Ast program = ast_make_simple(AST_PROGRAM, 0);
-	Ast last = nil;
-	Ast d = nil;
+	Ast last = program;
+	Ast node = nil;
 	next();
 	for (;;) {
 		if (ctx.tok == tENUM) {
 			next();
-			d = parse_enum_def();
+			node = parse_enum_def();
 		} else if (ctx.tok == tTYPE) {
 			next();
-			d = parse_type_def();
+			node = parse_type_def();
 		} else if (ctx.tok == tFUNC) {
 			next();
-			d = parse_function();
+			node = parse_function();
 		} else if (ctx.tok == tVAR) {
 			next();
-			d = parse_global_var();
+			node = parse_global_var();
 		} else if (ctx.tok == tEOF) {
 			return program;
 		} else {
 			expected("function, variable, or type definition");
 		}
-		if (last == nil) {
-			program->child = d;
-		} else {
-			last->next = d;
+		if (node != nil) {
+			last->c2 = node;
+			last = node;
 		}
-		last = d;
 	}
 }
 
@@ -1847,9 +1848,11 @@ void ast_dump_rtype(Symbol sym, u32 indent) {
 	printf("\n");
 }
 
-void ast_dump(Ast node, u32 indent) {
+void ast_dump(Ast node, u32 indent, bool dumplist) {
 	u32 i = 0;
 	while (i < indent) { printf("  "); i++; }
+	indent = indent + 1;
+
 	printf("%s ", ast_kind[node->kind]);
 	if (node->kind == AST_NAME) {
 		printf("'%s'\n", node->name->text);
@@ -1879,17 +1882,24 @@ void ast_dump(Ast node, u32 indent) {
 		printf("\n");
 	}
 	if (node->kind == AST_FUNC) {
-		ast_dump_syms(node->sym->first, "Param", indent + 1);
-		ast_dump_rtype(node->sym, indent + 1);
+		ast_dump_syms(node->sym->first, "Param", indent);
+		ast_dump_rtype(node->sym, indent);
 	}
 	if (node->kind == AST_BLOCK) {
-		ast_dump_syms(node->sym, "Local", indent + 1);
+		ast_dump_syms(node->sym, "Local", indent);
 	}
-	node = node->child;
-	indent = indent + 1;
-	while (node != nil) {
-		ast_dump(node, indent);
-		node = node->next;
+	if (node->c0 != nil) {
+		ast_dump(node->c0, indent, true);
+	}
+	if (node->c1 != nil) {
+		ast_dump(node->c1, indent, true);
+	}
+	if (dumplist) {
+		node = node->c2;
+		while (node != nil) {
+			ast_dump(node, indent, false);
+			node = node->c2;
+		}
 	}
 }
 
@@ -2073,7 +2083,7 @@ i32 main(int argc, args argv) {
 	Ast a = parse_program();
 
 	if (astdump) {
-		ast_dump(a, 0);
+		ast_dump(a, 0, true);
 	}
 
 	gen_risc5_simple(a);

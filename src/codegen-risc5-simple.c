@@ -237,8 +237,8 @@ u32 gen_assign(Symbol sym, Ast expr) {
 
 u32 gen_call(Ast node) {
 	gen_trace("gen_call()\n");
-	Symbol sym = node->child->sym;
-	Ast arg = node->child->next;
+	Symbol sym = node->c0->sym;
+	Ast arg = node->c2;
 
 	if (sym->flags & SYM_IS_BUILTIN) {
 		u32 r = gen_expr(arg);
@@ -252,7 +252,7 @@ u32 gen_call(Ast node) {
 			u32 r = gen_expr(arg);
 			emit_mem(STW, r, SP, 4 * n);
 			put_reg(r);
-			arg = arg->next;
+			arg = arg->c2;
 			n = n + 1;
 		}
 		gen_branch_sym(AL|L, sym);
@@ -271,8 +271,8 @@ u32 gen_lexpr(Ast node) {
 
 u32 gen_binop(Ast node, u32 op) {
 	gen_trace( "gen_binop()\n");
-	u32 left = gen_expr(node->child);
-	u32 right = gen_expr(node->child->next);
+	u32 left = gen_expr(node->c0);
+	u32 right = gen_expr(node->c1);
 	u32 res = get_reg_tmp();
 	emit_op(op, res, left, right);
 	put_reg(left);
@@ -282,8 +282,8 @@ u32 gen_binop(Ast node, u32 op) {
 
 u32 gen_relop(Ast node, u32 cc) {
 	gen_trace("gen_relop()\n");
-	u32 left = gen_expr(node->child);
-	u32 right = gen_expr(node->child->next);
+	u32 left = gen_expr(node->c0);
+	u32 right = gen_expr(node->c1);
 	u32 res = get_reg_tmp();
 	emit_movi(res, 1);
 	emit_op(SUB, left, left, right);
@@ -315,10 +315,10 @@ u32 gen_expr(Ast node) {
 	} else if (node->kind == AST_BINOP) {
 		u32 op = node->ival;
 		if (op == tASSIGN) {
-			if (node->child->kind != AST_NAME) {
+			if (node->c0->kind != AST_NAME) {
 				error("unhandled complex assignment");
 			}
-			return gen_assign(node->child->sym, node->child->next);
+			return gen_assign(node->c0->sym, node->c1);
 		} else if ((op & tcMASK) == tcRELOP) {
 			return gen_relop(node, rel_op_to_cc_tab[op - tEQ]);
 		} else if ((op & tcMASK) == tcADDOP) {
@@ -330,7 +330,7 @@ u32 gen_expr(Ast node) {
 		}
 	} else if (node->kind == AST_UNOP) {
 		u32 op = node->ival;
-		u32 r = gen_expr(node->child);
+		u32 r = gen_expr(node->c0);
 		if (op == tMINUS) {
 			emit_movi(R11, 0);
 			emit_op(SUB, r, R11, r);
@@ -361,13 +361,13 @@ void gen_while(Ast node) {
 	loop_exit = &list;
 
 	loop_continue = ctx.pc;
-	u32 r = gen_expr(node->child);
+	u32 r = gen_expr(node->c0);
 
 	emit_mov(R11, r); // set z flag
 	put_reg(r);
 	gen_branch_fwd(EQ, &list);
 
-	gen_block(node->child->next);
+	gen_block(node->c1);
 
 	gen_branch(AL, loop_continue);
 
@@ -380,24 +380,26 @@ void gen_while(Ast node) {
 }
 
 void gen_if_else(Ast node) {
-	gen_expr(node->child);
-	Ast ifthen = node->child->next;
-	Ast ifelse = ifthen->next;
+	gen_expr(node->c0);
+	Ast ifthen = node->c1;
+	Ast ifelse = node->c2;
 	gen_block(ifthen);
 	if (ifelse != nil) {
 		gen_block(ifelse);
 	}
 }
 
+void gen_block(Ast node);
+
 void gen_stmt(Ast node) {
 	gen_trace("gen_stmt()\n");
 	u32 kind = node->kind;
 	if (kind == AST_EXPR) {
-		u32 r = gen_expr(node->child);
+		u32 r = gen_expr(node->c0);
 		put_reg(r);
 	} else if (kind == AST_LOCAL) {
-		if (node->child) {
-			u32 r = gen_assign(node->sym, node->child);
+		if (node->c0) {
+			u32 r = gen_assign(node->sym, node->c0);
 			put_reg(r);
 		}
 	} else if (kind == AST_IF) {
@@ -405,8 +407,8 @@ void gen_stmt(Ast node) {
 	} else if (kind == AST_WHILE) {
 		gen_while(node);
 	} else if (kind == AST_RETURN) {
-		if (node->child) {
-			u32 r = gen_expr(node->child);
+		if (node->c0) {
+			u32 r = gen_expr(node->c0);
 			emit_mov(0, r);
 			put_reg(r);
 		}
@@ -415,6 +417,8 @@ void gen_stmt(Ast node) {
 		gen_branch_fwd(AL, loop_exit);
 	} else if (kind == AST_CONTINUE) {
 		gen_branch(AL, loop_continue);
+	} else if (kind == AST_BLOCK) {
+		gen_block(node);
 	} else {
 		error("gen_stmt cannot handle %s\n", ast_kind[kind]);
 	}
@@ -422,10 +426,10 @@ void gen_stmt(Ast node) {
 
 void gen_block(Ast node) {
 	gen_trace("gen_block()\n");
-	node = node->child;
+	node = node->c2;
 	while (node != nil) {
 		gen_stmt(node);
-		node = node->next;
+		node = node->c2;
 	}
 }
 
@@ -475,7 +479,7 @@ void gen_func(Ast node) {
 	func_exit = &list;
 
 	// generate body
-	gen_block(node->child);
+	gen_block(node->c0);
 
 	// patch branches to epilogue
 	fixup_branches_fwd(list.next);
@@ -493,12 +497,12 @@ void gen_risc5_simple(Ast node) {
 	emit_movi(SB, 0); // placeholder SB load
 	emit_bi(AL, 0);  // placeholder branch to init
 
-	node = node->child;
+	node = node->c2;
 	while (node != nil) {
 		if (node->kind == AST_FUNC) {
 			gen_func(node);
 		}
-		node = node->next;
+		node = node->c2;
 	}
 
 	Symbol sym = symbol_find(string_make("start", 5));
