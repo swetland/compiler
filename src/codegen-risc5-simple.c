@@ -16,13 +16,15 @@ bool is_tmp_reg(u32 n) {
 	return (n >= tmp_reg_first) && (n <= tmp_reg_last);
 }
 
-u32 regbits;
+u32 regbits = 0;
+u32 regcount = 0;
 
 u32 get_reg_tmp() {
 	u32 n = tmp_reg_first;
 	while (n <= tmp_reg_last) {
 		if (!(regbits & (1 << n))) {
 			regbits |= (1 << n);
+			regcount++;
 			return n;
 		}
 		n++;
@@ -41,6 +43,11 @@ void put_reg(u32 r) {
 		error("freeing non-allocated register %u\n", r);
 	}
 	regbits = regbits & (~(1 << r));
+	regcount--;
+}
+
+bool is_reg_busy(u32 r) {
+	return regbits & (1 << r);
 }
 
 void emit(u32 ins) {
@@ -203,14 +210,15 @@ u32 loop_continue = 0;
 Fixup loop_exit = nil;
 Fixup func_exit = nil;
 
-void gen_trace(str msg) {
-}
-
 void gen_block(Ast node);
 u32 gen_expr(Ast node);
 
 Ast err_last_func = nil;
 Ast err_ast = nil;
+
+void gen_trace(str msg) {
+//	fprintf(stderr, "%p %p %s\n", err_last_func, err_ast, msg);
+}
 
 void dump_error_ctxt() {
 	fprintf(stderr, "\n");
@@ -236,7 +244,7 @@ void sym_get_loc(Symbol sym, u32* base, i32* offset) {
 }
 
 u32 gen_assign(Symbol sym, Ast expr) {
-	gen_trace("gen_assign()\n");
+	gen_trace("gen_assign()");
 	u32 base;
 	i32 offset;
 	sym_get_loc(sym, &base, &offset);
@@ -246,8 +254,39 @@ u32 gen_assign(Symbol sym, Ast expr) {
 	return r;
 }
 
+u32 reg_save(u32 base) {
+	u32 r = tmp_reg_first;
+	u32 n = 0;
+	while (r <= tmp_reg_last) {
+		if (regbits & (1 << r)) {
+			emit_mem(STW, r, SP, base + n);
+			n += 4;
+		}
+		r++;
+	}
+	u32 mask = regbits;
+	regbits = 0;
+	return mask;
+}
+
+void reg_restore(u32 base, u32 mask) {
+	if (regbits != 0) {
+		error("register restore collision");
+	}
+	regbits = mask;
+	u32 r = tmp_reg_first;
+	u32 n = 0;
+	while (r <= tmp_reg_last) {
+		if (regbits & (1 << r)) {
+			emit_mem(LDW, r, SP, base + n);
+			n += 4;
+		}
+		r++;
+	}
+}
+
 u32 gen_call(Ast node) {
-	gen_trace("gen_call()\n");
+	gen_trace("gen_call()");
 	Symbol sym = node->c0->sym;
 	Ast arg = node->c2;
 
@@ -256,23 +295,27 @@ u32 gen_call(Ast node) {
 		emit_movi(R11, 0xffff0000);
 		emit_mem(STW, r, R11, 0x100 + sym->value * 4);
 		put_reg(r);
-	} else if (sym->type->len > 0) {
-		// XXX: must save regs
-		emit_opi(SUB, SP, SP, 4 * sym->type->len);
-		u32 n = 0;
-		while (arg != nil) {
-			u32 r = gen_expr(arg);
-			emit_mem(STW, r, SP, 4 * n);
-			put_reg(r);
-			arg = arg->c2;
-			n = n + 1;
-		}
-		gen_branch_sym(AL|L, sym);
-		emit_opi(ADD, SP, SP, 4 * sym->type->len);
-		// XXX: must restore regs
 	} else {
-		// no args
-		gen_branch_sym(AL|L, sym);
+		u32 sizeregs = 4 * regcount;
+		if ((sym->type->len > 0) || (sizeregs > 0)) {
+			u32 sizeargs = 4 * sym->type->len;
+			emit_opi(SUB, SP, SP, sizeregs + sizeargs);
+			u32 mask = reg_save(sizeargs);
+			u32 n = 0;
+			while (arg != nil) {
+				u32 r = gen_expr(arg);
+				emit_mem(STW, r, SP, 4 * n);
+				put_reg(r);
+				arg = arg->c2;
+				n = n + 1;
+			}
+			gen_branch_sym(AL|L, sym);
+			reg_restore(sizeargs, mask);
+			emit_opi(ADD, SP, SP, sizeregs + sizeargs);
+		} else {
+			// no args or temporaries to save
+			gen_branch_sym(AL|L, sym);
+		}
 	}
 	// return is in r0, if it exists
 	// stash it somewhere where it won't get stomped
@@ -287,7 +330,7 @@ u32 gen_lexpr(Ast node) {
 }
 
 u32 gen_binop(Ast node, u32 op) {
-	gen_trace( "gen_binop()\n");
+	gen_trace( "gen_binop()");
 	u32 left = gen_expr(node->c0);
 	u32 right = gen_expr(node->c1);
 	u32 res = get_reg_tmp();
@@ -298,7 +341,7 @@ u32 gen_binop(Ast node, u32 op) {
 }
 
 u32 gen_relop(Ast node, u32 cc) {
-	gen_trace("gen_relop()\n");
+	gen_trace("gen_relop()");
 	u32 left = gen_expr(node->c0);
 	u32 right = gen_expr(node->c1);
 	u32 res = get_reg_tmp();
@@ -313,7 +356,7 @@ u32 gen_relop(Ast node, u32 cc) {
 
 u32 gen_expr(Ast node) {
 	err_ast = node;
-	gen_trace("gen_expr()\n");
+	gen_trace("gen_expr()");
 	if (node->kind == AST_U32) {
 		u32 r = get_reg_tmp();
 		emit_movi(r, node->ival);
@@ -369,6 +412,7 @@ u32 gen_expr(Ast node) {
 }
 
 void gen_while(Ast node) {
+	gen_trace("gen_while()");
 	// save branch targets
 	u32 old_loop_continue = loop_continue;
 	Fixup old_loop_exit = loop_exit;
@@ -397,6 +441,10 @@ void gen_while(Ast node) {
 }
 
 void gen_if_else(Ast node) {
+	gen_trace("gen_if()");
+	// IF contains one or more IFELSE nodes
+	node = node->c0;
+
 	// compute if expr
 	// branch ahead if false;
 	u32 r = gen_expr(node->c0);
@@ -412,7 +460,8 @@ void gen_if_else(Ast node) {
 	while (node != nil) {
 		fixup_branch_fwd(l0_br_false);
 
-		if (node->kind == AST_IF) { // ifelse ...
+		if (node->kind == AST_IFELSE) { // ifelse ...
+			gen_trace("gen_ifelse()");
 			r = gen_expr(node->c0);
 			emit_mov(R11, r); // set z flag
 			put_reg(r);
@@ -421,6 +470,7 @@ void gen_if_else(Ast node) {
 			gen_block(node->c1);
 			node = node->c2;
 		} else { // else ...
+			gen_trace("gen_else()");
 			gen_block(node);
 			return;
 		}

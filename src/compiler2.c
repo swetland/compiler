@@ -61,35 +61,43 @@ struct StringRec {
 };
 
 enum {
+// expression parts
 	AST_NAME,
 	AST_U32,
 	AST_STRING,
 	AST_BINOP,    // c0=EXPR c1=EXPR
 	AST_UNOP,     // c0=EXPR
+	AST_DEREF,
+	AST_INDEX,
+// container of statements
 	AST_BLOCK,    // c0=STMT
+// statements (chained into a list by c2)
 	AST_EXPR,     // c0=EXPR
 	AST_CALL,     // c0=NAME c2=EXPR*
 	AST_WHILE,    // c0=EXPR c1=BLOCK
-	AST_IF,       // c0=EXPR c1=BLOCKthen c2=BLOCKelse
+	AST_IF,       // c0=IFELSE
 	AST_RETURN,   // c0=EXPR
 	AST_BREAK,
 	AST_CONTINUE,
-	AST_LOCAL,    // c0=NAME c1=EXPR?
+// sub-part of if
+	AST_IFELSE,   // c0=EXPR c1=BLOCKthen c2=BLOCKelse|IFELSE
+// top node
 	AST_PROGRAM,  // c2=(TYPEDEF | ENUMDEF | FUNC | GLOBAL)*
+// program components (chained into a list by c2)
 	AST_TYPEDEF,
 	AST_ENUMDEF,  // c2=FIELD*
 	AST_FUNC,     // c0=BLOCK
 	AST_GLOBAL,   // c0=EXPR
+	AST_LOCAL,    // c0=NAME c1=EXPR?
 	AST_FIELD,
-	AST_DEREF,
-	AST_INDEX,
 };
 
-str ast_kind[AST_INDEX + 1] = {
-	"NAME", "U32", "STR", "BINOP", "UNOP", "BLOCK", "EXPR",
-	"CALL", "WHILE", "IF", "RETURN", "BREAK", "CONTINUE",
+str ast_kind[AST_FIELD + 1] = {
+	"NAME", "U32", "STR", "BINOP", "UNOP", "DEREF", "INDEX",
+	"BLOCK", "EXPR", "CALL", "WHILE", "IF",
+	"RETURN", "BREAK", "CONTINUE", "IFELSE"
 	"LOCAL", "PROGRAM", "TYPEDEF", "ENUMDEF", "FUNCDEF",
-	"GLOBAL", "FIELD", "DEREF", "INDEX"
+	"GLOBAL", "LOCAL", "FIELD",
 };
 
 struct AstRec {
@@ -1330,7 +1338,9 @@ Ast parse_while() {
 
 Ast parse_if() {
 	// if expr { block }
-	Ast ifnode = ast_make_simple(AST_IF, 0);
+	Ast node = ast_make_simple(AST_IF, 0);
+	Ast ifnode = ast_make_simple(AST_IFELSE, 0);
+	node->c0 = ifnode;
 	ifnode->c0 = parse_expr();
 	require(tOBRACE);
 	scope_push(SCOPE_BLOCK, nil);
@@ -1342,7 +1352,7 @@ Ast parse_if() {
 		if (ctx.tok == tIF) {
 			// ... if expr { block }
 			next();
-			Ast ifelse = ast_make_simple(AST_IF, 0);
+			Ast ifelse = ast_make_simple(AST_IFELSE, 0);
 			ifelse->c0 = parse_expr();
 			require(tOBRACE);
 			scope_push(SCOPE_BLOCK, nil);
@@ -1359,7 +1369,7 @@ Ast parse_if() {
 			break;
 		}
 	}
-	return ifnode;
+	return node;
 }
 
 Ast parse_return() {
