@@ -209,6 +209,17 @@ void gen_trace(str msg) {
 void gen_block(Ast node);
 u32 gen_expr(Ast node);
 
+Ast err_last_func = nil;
+Ast err_ast = nil;
+
+void dump_error_ctxt() {
+	fprintf(stderr, "\n");
+	if (err_last_func) {
+		ast_dump(err_last_func, err_ast);
+	}
+	fprintf(stderr, "\n");
+}
+
 void sym_get_loc(Symbol sym, u32* base, i32* offset) {
 	if (sym->kind == SYM_LOCAL) {
 		*base = FP;
@@ -246,6 +257,7 @@ u32 gen_call(Ast node) {
 		emit_mem(STW, r, R11, 0x100 + sym->value * 4);
 		put_reg(r);
 	} else if (sym->type->len > 0) {
+		// XXX: must save regs
 		emit_opi(SUB, SP, SP, 4 * sym->type->len);
 		u32 n = 0;
 		while (arg != nil) {
@@ -257,12 +269,17 @@ u32 gen_call(Ast node) {
 		}
 		gen_branch_sym(AL|L, sym);
 		emit_opi(ADD, SP, SP, 4 * sym->type->len);
+		// XXX: must restore regs
 	} else {
 		// no args
 		gen_branch_sym(AL|L, sym);
 	}
 	// return is in r0, if it exists
-	return 0;
+	// stash it somewhere where it won't get stomped
+	// by other calls in this expr
+	u32 r = get_reg_tmp();
+	emit_mov(r, R0);
+	return r;
 }
 
 u32 gen_lexpr(Ast node) {
@@ -295,6 +312,7 @@ u32 gen_relop(Ast node, u32 cc) {
 }
 
 u32 gen_expr(Ast node) {
+	err_ast = node;
 	gen_trace("gen_expr()\n");
 	if (node->kind == AST_U32) {
 		u32 r = get_reg_tmp();
@@ -342,7 +360,6 @@ u32 gen_expr(Ast node) {
 			error("gen_expr cannot handle unop %s\n", tnames[op]);
 		}
 		return r;
-		error("sorry no unops");
 	} else if (node->kind == AST_CALL) {
 		return gen_call(node);
 	} else {
@@ -380,18 +397,42 @@ void gen_while(Ast node) {
 }
 
 void gen_if_else(Ast node) {
-	gen_expr(node->c0);
-	Ast ifthen = node->c1;
-	Ast ifelse = node->c2;
-	gen_block(ifthen);
-	if (ifelse != nil) {
-		gen_block(ifelse);
+	// compute if expr
+	// branch ahead if false;
+	u32 r = gen_expr(node->c0);
+	emit_mov(R11, r); // set z flag;
+	put_reg(r);
+	u32 l0_br_false = ctx.pc;
+	emit_bi(EQ, 0);
+
+	// exec then block
+	gen_block(node->c1);
+
+	node = node->c2;
+	while (node != nil) {
+		fixup_branch_fwd(l0_br_false);
+
+		if (node->kind == AST_IF) { // ifelse ...
+			r = gen_expr(node->c0);
+			emit_mov(R11, r); // set z flag
+			put_reg(r);
+			l0_br_false = ctx.pc;
+			emit_bi(EQ, 0);
+			gen_block(node->c1);
+			node = node->c2;
+		} else { // else ...
+			gen_block(node);
+			return;
+		}
 	}
+
+	fixup_branch_fwd(l0_br_false);
 }
 
 void gen_block(Ast node);
 
 void gen_stmt(Ast node) {
+	err_ast = node;
 	gen_trace("gen_stmt()\n");
 	u32 kind = node->kind;
 	if (kind == AST_EXPR) {
@@ -455,6 +496,8 @@ void gen_block(Ast node) {
 //                  SP -> locn
 
 void gen_func(Ast node) {
+	err_last_func = node;
+	err_ast = node;
 	gen_trace("gen_func()\n");
 
 	// local space plus saved lr and fp
@@ -504,6 +547,8 @@ void gen_risc5_simple(Ast node) {
 		}
 		node = node->c2;
 	}
+
+	err_last_func = nil;
 
 	Symbol sym = symbol_find(string_make("start", 5));
 	if (sym == nil) {

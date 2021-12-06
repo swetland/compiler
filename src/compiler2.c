@@ -574,6 +574,7 @@ void ctx_init() {
 }
 
 void dump_file_line(const char* fn, u32 offset);
+void dump_error_ctxt();
 
 #if C
 void error(const char *fmt, ...)
@@ -592,6 +593,8 @@ void error(const char *fmt)
 		// dump_file_line(ctx.filename, ctx.lineoffset);
 	}
 	fprintf(stderr, "\n");
+
+	dump_error_ctxt();
 
 	if (ctx.flags & cfAbortOnError) {
 		abort();
@@ -1326,45 +1329,36 @@ Ast parse_while() {
 }
 
 Ast parse_if() {
-	// Scope outer = scope_push(SCOPE_BLOCK, nil);
-	Ast expr = parse_expr();
+	// if expr { block }
+	Ast ifnode = ast_make_simple(AST_IF, 0);
+	ifnode->c0 = parse_expr();
 	require(tOBRACE);
 	scope_push(SCOPE_BLOCK, nil);
-	Ast block = parse_block();
-	block->sym = scope_pop();
-	Ast ifnode = ast_make_simple(AST_IF, 0);
-	ifnode->c0 = expr;
-	ifnode->c1 = block;
-	Ast last = block;
+	ifnode->c1 = parse_block();
+	ifnode->c1->sym = scope_pop();
 	while (ctx.tok == tELSE) {
 		next();
+		// ... else ...
 		if (ctx.tok == tIF) {
+			// ... if expr { block }
 			next();
-			Ast expr = parse_expr();
-
-			// generate "if else" code
+			Ast ifelse = ast_make_simple(AST_IF, 0);
+			ifelse->c0 = parse_expr();
 			require(tOBRACE);
 			scope_push(SCOPE_BLOCK, nil);
-			Ast block = parse_block();
-			block->sym = scope_pop();
-
-			last->c2 = expr;
-			expr->c2 = block;
-			last = block;
+			ifelse->c1 = parse_block();
+			ifelse->c1->sym = scope_pop();
+			ifnode->c2 = ifelse;
+			ifnode = ifelse;
 		} else {
-			// generate "else" code
+			// ... { block }
 			require(tOBRACE);
 			scope_push(SCOPE_BLOCK, nil);
-			Ast block = parse_block();
-			block->sym = scope_pop();
-			last->c2 = block;
-			last = block;
+			ifnode->c2 = parse_block();
+			ifnode->c2->sym = scope_pop();
 			break;
 		}
 	}
-
-	// close outer scope
-	// scope_pop();
 	return ifnode;
 }
 
@@ -1848,9 +1842,15 @@ void ast_dump_rtype(Symbol sym, u32 indent) {
 	printf("\n");
 }
 
-void ast_dump(Ast node, u32 indent, bool dumplist) {
+int _ast_dump(Ast node, u32 indent, bool dumplist, Ast mark) {
 	u32 i = 0;
-	while (i < indent) { printf("  "); i++; }
+	i32 r = 0;
+
+	if (mark == node) {
+		while (i < indent) { printf(">>"); i++; }
+	} else {
+		while (i < indent) { printf("  "); i++; }
+	}
 	indent = indent + 1;
 
 	printf("%s ", ast_kind[node->kind]);
@@ -1888,19 +1888,33 @@ void ast_dump(Ast node, u32 indent, bool dumplist) {
 	if (node->kind == AST_BLOCK) {
 		ast_dump_syms(node->sym, "Local", indent);
 	}
+	if (mark == node) {
+		return 1;
+	}
 	if (node->c0 != nil) {
-		ast_dump(node->c0, indent, true);
+		if (_ast_dump(node->c0, indent, true, mark)) {
+			return 1;
+		}
 	}
 	if (node->c1 != nil) {
-		ast_dump(node->c1, indent, true);
+		if (_ast_dump(node->c1, indent, true, mark)) {
+			return 1;
+		}
 	}
 	if (dumplist) {
 		node = node->c2;
 		while (node != nil) {
-			ast_dump(node, indent, false);
+			if (_ast_dump(node, indent, false, mark)) {
+				return 1;
+			}
 			node = node->c2;
 		}
 	}
+	return 0;
+}
+
+void ast_dump(Ast node, Ast mark) {
+	_ast_dump(node, 0, true, mark);
 }
 
 #include "codegen-risc5-simple.c"
@@ -2083,7 +2097,7 @@ i32 main(int argc, args argv) {
 	Ast a = parse_program();
 
 	if (astdump) {
-		ast_dump(a, 0, true);
+		ast_dump(a, nil);
 	}
 
 	gen_risc5_simple(a);
