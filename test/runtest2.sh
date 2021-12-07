@@ -7,13 +7,14 @@ src="$1"
 txt="$2"
 bin="${txt%.txt}.bin"
 lst="${txt%.txt}.lst"
+ast="${txt%.txt}.ast"
 log="${txt%.txt}.log"
 msg="${txt%.txt}.msg"
 gold="${src%.src}.log"
 
 #echo "RUNTEST2: $src: compiling..."
 #echo bin/compiler2 -o "$bin" -l "$lst" "$src" "$msg"
-if bin/compiler2 -o "$bin" -l "$lst" "$src" 2> "$msg"; then
+if bin/compiler2 -o "$bin" -a "$ast" -l "$lst" "$src" 2> "$msg"; then
 	# success!
 	if [[ "$txt" == *"-err"* ]]; then
 		# but this was an error test, so...
