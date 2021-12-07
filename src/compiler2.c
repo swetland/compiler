@@ -95,8 +95,8 @@ enum {
 str ast_kind[AST_FIELD + 1] = {
 	"NAME", "U32", "STR", "BINOP", "UNOP", "DEREF", "INDEX",
 	"BLOCK", "EXPR", "CALL", "WHILE", "IF",
-	"RETURN", "BREAK", "CONTINUE", "IFELSE"
-	"LOCAL", "PROGRAM", "TYPEDEF", "ENUMDEF", "FUNCDEF",
+	"RETURN", "BREAK", "CONTINUE", "IFELSE",
+	"PROGRAM", "TYPEDEF", "ENUMDEF", "FUNCDEF",
 	"GLOBAL", "LOCAL", "FIELD",
 };
 
@@ -139,7 +139,7 @@ struct TypeRec {
 	Type base;      // pointer-to, func-return-type, array-of
 	Symbol sym;     // if not anonymous
 	Symbol first;   // list of params or fields
-	u32 len;        // array, params
+	u32 len;        // array elem count, param count
 	u32 size;       // in bytes, local stack for funcs
 };
 
@@ -158,11 +158,12 @@ str sym_kind[SYM_FIELD + 1] = {
 };
 
 enum {
-	SYM_IS_READ_ONLY = 1,
-	SYM_IS_PUBLIC = 2,
-	SYM_IS_DEFINED = 4,
-	SYM_IS_BUILTIN = 8,
-	SYM_IS_PLACED = 16, // exists at addr in sym->value
+	SYM_IS_READ_ONLY = 0x01,
+	SYM_IS_PUBLIC =    0x02,
+	SYM_IS_DEFINED =   0x04,
+	SYM_IS_BUILTIN =   0x08,
+	SYM_IS_PLACED =    0x10, // exists at addr in sym->value
+	SYM_IS_REFERENCE = 0x20, // stored as pointer-to-type
 };
 
 struct SymbolRec {
@@ -1109,6 +1110,7 @@ Ast parse_operand() {
 		}
 		node = ast_make_name(ctx.ident);
 		node->sym = sym;
+		node->type = sym->type;
 	} else {
 		error("invalid expression");
 	}

@@ -381,6 +381,50 @@ u32 gen_logical_op(Ast node, u32 cc, u32 sc) {
 	return r;
 }
 
+u32 gen_array_addr(Ast node) {
+	err_ast = node;
+	if (node->type->kind != TYPE_ARRAY) {
+		error("cannot deref non-array type");
+	}
+	if (node->kind == AST_NAME) {
+		u32 base;
+		i32 offset;
+		sym_get_loc(node->sym, &base, &offset);
+		u32 r = get_reg_tmp();
+		if (node->sym->kind == SYM_PARAM) {
+			// arrays here are ptr-to-array, so deref that
+			emit_mem(LDW, r, base, offset);
+		} else {
+			// arrays elsewhere are inline, so just add offset
+			emit_opi(ADD, r, base, offset);
+		}
+		return r;
+	} else if (node->kind == AST_INDEX) {
+		error("not ready for [][]");
+	} else {
+		error("cannot dereference this");
+	}
+	return 0;
+}
+
+u32 gen_array_read(Ast node) {
+	u32 raddr = gen_array_addr(node->c0);
+	u32 roff = gen_expr(node->c1);
+
+	u32 sz = node->c0->type->base->size;
+	if (sz > 1) {
+		emit_opi(MUL, roff, roff, sz);
+	}
+	emit_op(ADD, raddr, raddr, roff);
+	if (sz == 1) {
+		emit_mem(LDB, roff, raddr, 0);
+	} else {
+		emit_mem(LDW, roff, raddr, 0);
+	}
+	put_reg(raddr);
+	return roff;
+}
+
 u32 gen_expr(Ast node) {
 	err_ast = node;
 	gen_src_xref(node);
@@ -437,6 +481,8 @@ u32 gen_expr(Ast node) {
 		return r;
 	} else if (node->kind == AST_CALL) {
 		return gen_call(node);
+	} else if (node->kind == AST_INDEX) {
+		return gen_array_read(node);
 	} else {
 		error("gen_expr cannot handle %s\n", ast_kind[node->kind]);
 	}
