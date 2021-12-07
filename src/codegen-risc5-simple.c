@@ -227,7 +227,7 @@ void gen_src_xref(Ast node) {
 void dump_error_ctxt() {
 	fprintf(stderr, "\n");
 	if (err_last_func) {
-		ast_dump(err_last_func, err_ast);
+		ast_dump(stderr, err_last_func, err_ast);
 	}
 	fprintf(stderr, "\n");
 }

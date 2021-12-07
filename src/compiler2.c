@@ -430,26 +430,26 @@ bool type_is_same(Type a, Type b) {
 	return true;
 }
 
-void type_dump(Type type, bool use_short_name) {
+void type_dump(FILE* fp, Type type, bool use_short_name) {
 	if (use_short_name && (type->sym != nil)) {
-		printf("%s", type->sym->name->text);
+		fprintf(fp, "%s", type->sym->name->text);
 	} else if (type->kind == TYPE_ARRAY) {
-		printf("[%u]", type->len);
-		type_dump(type->base, true);
+		fprintf(fp, "[%u]", type->len);
+		type_dump(fp, type->base, true);
 	} else if (type->kind == TYPE_RECORD) {
-		printf("struct {\n");
+		fprintf(fp, "struct {\n");
 		Symbol field = type->first;
 		while (field != nil) {
-			printf("    %s ", field->name->text);
-			type_dump(field->type, true);
-			printf(", // off=%u, sz=%u\n", field->value, field->type->size);
+			fprintf(fp, "    %s ", field->name->text);
+			type_dump(fp, field->type, true);
+			fprintf(fp, ", // off=%u, sz=%u\n", field->value, field->type->size);
 			field = field->next;
 		}
-		printf("}");
+		fprintf(fp, "}");
 	} else {
-		printf("%s", type_kind[type->kind]);
+		fprintf(fp, "%s", type_kind[type->kind]);
 		if ((type->kind == TYPE_POINTER) || (type->kind == TYPE_SLICE)) {
-			type_dump(type->base, true);
+			type_dump(fp, type->base, true);
 		}
 	}
 }
@@ -1840,88 +1840,88 @@ Ast parse_program() {
 	}
 }
 
-void ast_dump_syms(Symbol sym, str tag, u32 indent) {
+void ast_dump_syms(FILE* fp, Symbol sym, str tag, u32 indent) {
 	while (sym != nil) {
 		u32 i = 0;
-		while (i < indent) { printf("  "); i++; }
-		printf("%s '%s' ", tag, sym->name->text);
-		type_dump(sym->type, true);
-		printf("\n");
+		while (i < indent) { fprintf(fp, "  "); i++; }
+		fprintf(fp, "%s '%s' ", tag, sym->name->text);
+		type_dump(fp, sym->type, true);
+		fprintf(fp, "\n");
 		sym = sym->next;
 	}
 }
 
-void ast_dump_rtype(Symbol sym, u32 indent) {
+void ast_dump_rtype(FILE* fp, Symbol sym, u32 indent) {
 	u32 i = 0;
-	while (i < indent) { printf("  "); i++; }
-	printf("Returns ");
-	type_dump(sym->type->base, true);
-	printf("\n");
+	while (i < indent) { fprintf(fp, "  "); i++; }
+	fprintf(fp, "Returns ");
+	type_dump(fp, sym->type->base, true);
+	fprintf(fp, "\n");
 }
 
-int _ast_dump(Ast node, u32 indent, bool dumplist, Ast mark) {
+int _ast_dump(FILE* fp, Ast node, u32 indent, bool dumplist, Ast mark) {
 	u32 i = 0;
 	i32 r = 0;
 
 	if (mark == node) {
-		while (i < indent) { printf(">>"); i++; }
+		while (i < indent) { fprintf(fp, ">>"); i++; }
 	} else {
-		while (i < indent) { printf("  "); i++; }
+		while (i < indent) { fprintf(fp, "  "); i++; }
 	}
 	indent = indent + 1;
 
-	printf("%s ", ast_kind[node->kind]);
+	fprintf(fp, "%s ", ast_kind[node->kind]);
 	if (node->kind == AST_NAME) {
-		printf("'%s'\n", node->name->text);
+		fprintf(fp, "'%s'\n", node->name->text);
 	} else if ((node->kind == AST_BINOP) || (node->kind == AST_UNOP)) {
-		printf("%s\n", tnames[node->ival]);
+		fprintf(fp, "%s\n", tnames[node->ival]);
 	} else if (node->kind == AST_U32) {
-		printf("0x%x\n", node->ival);
+		fprintf(fp, "0x%x\n", node->ival);
 	} else if (node->kind == AST_TYPEDEF) {
-		printf("'%s' ", node->name->text);
-		type_dump(node->type, false);
-		printf("\n");
+		fprintf(fp, "'%s' ", node->name->text);
+		type_dump(fp, node->type, false);
+		fprintf(fp, "\n");
 	} else {
 		if (node->name) {
-			printf("'%s' ",node->name->text);
+			fprintf(fp,"'%s' ",node->name->text);
 		}
 		if (node->type) {
-			type_dump(node->type, true);
-			printf(" ");
-			//printf("<type %p> ", node->type);
+			type_dump(fp, node->type, true);
+			fprintf(fp, " ");
+			//printf(fp, "<type %p> ", node->type);
 		}
 		if (node->sym) {
-			//printf("<sym@%p> ", node->sym);
+			//printf(fp, "<sym@%p> ", node->sym);
 		}
 		if (node->ival) {
-			printf("%u", node->ival);
+			fprintf(fp,"%u", node->ival);
 		}
-		printf("\n");
+		fprintf(fp, "\n");
 	}
 	if (node->kind == AST_FUNC) {
-		ast_dump_syms(node->sym->first, "Param", indent);
-		ast_dump_rtype(node->sym, indent);
+		ast_dump_syms(fp, node->sym->first, "Param", indent);
+		ast_dump_rtype(fp, node->sym, indent);
 	}
 	if (node->kind == AST_BLOCK) {
-		ast_dump_syms(node->sym, "Local", indent);
+		ast_dump_syms(fp, node->sym, "Local", indent);
 	}
 	if (mark == node) {
 		return 1;
 	}
 	if (node->c0 != nil) {
-		if (_ast_dump(node->c0, indent, true, mark)) {
+		if (_ast_dump(fp, node->c0, indent, true, mark)) {
 			return 1;
 		}
 	}
 	if (node->c1 != nil) {
-		if (_ast_dump(node->c1, indent, true, mark)) {
+		if (_ast_dump(fp, node->c1, indent, true, mark)) {
 			return 1;
 		}
 	}
 	if (dumplist) {
 		node = node->c2;
 		while (node != nil) {
-			if (_ast_dump(node, indent, false, mark)) {
+			if (_ast_dump(fp, node, indent, false, mark)) {
 				return 1;
 			}
 			node = node->c2;
@@ -1930,8 +1930,8 @@ int _ast_dump(Ast node, u32 indent, bool dumplist, Ast mark) {
 	return 0;
 }
 
-void ast_dump(Ast node, Ast mark) {
-	_ast_dump(node, 0, true, mark);
+void ast_dump(FILE* fp, Ast node, Ast mark) {
+	_ast_dump(fp, node, 0, true, mark);
 }
 
 #include "codegen-risc5-simple.c"
@@ -2035,7 +2035,6 @@ i32 main(int argc, args argv) {
 	str astname = nil;
 	bool dump = false;
 	bool scan_only = false;
-	bool astdump = false;
 
 	ctx_init();
 	ctx.filename = "<commandline>";
@@ -2056,7 +2055,12 @@ i32 main(int argc, args argv) {
 			argc--;
 			argv++;
 		} else if (!strcmp(argv[1], "-a")) {
-			astdump = true;
+			if (argc < 2) {
+				error("option -a requires argument");
+			}
+			astname = argv[2];
+			argc--;
+			argv++;
 		} else if (!strcmp(argv[1], "-p")) {
 			dump = true;
 		} else if (!strcmp(argv[1], "-v")) {
@@ -2084,7 +2088,7 @@ i32 main(int argc, args argv) {
 "\n"
 "options:  -o <filename>    binary output (default 'out.bin')\n"
 "          -l <filename>    listing output (default none)\n"
-"          -a               dump AST tree\n"
+"          -a <filename>    dump AST tree\n"
 "          -v               trace code generation\n"
 "          -s               scan only\n"
 "          -p               dump type context\n"
@@ -2113,8 +2117,11 @@ i32 main(int argc, args argv) {
 
 	Ast a = parse_program();
 
-	if (astdump) {
-		ast_dump(a, nil);
+	if (astname != nil) {
+		FILE *fp;
+		if ((fp = fopen(astname, "w")) != nil) {
+			ast_dump(fp, a, nil);
+		}
 	}
 
 	gen_risc5_simple(a);
