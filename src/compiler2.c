@@ -1651,6 +1651,11 @@ Symbol parse_param(String fname, u32 n, Symbol first, Symbol last) {
 	Type ptype = parse_type(false);
 	Symbol param = symbol_make(SYM_PARAM, 0, pname, ptype, /* 4 + */ n * 4);
 
+	// arrays and structs are always passed as reference parameters
+	if ((ptype->kind == TYPE_ARRAY) || (ptype->kind == TYPE_RECORD)) {
+		param->flags |= SYM_IS_REFERENCE;
+	}
+
 	Symbol sym = first;
 	while (sym != nil) {
 		if (sym->name == param->name) {

@@ -232,6 +232,8 @@ void dump_error_ctxt() {
 	fprintf(stderr, "\n");
 }
 
+// obtain base register and offset
+// for the memory backing a Symbol
 void sym_get_loc(Symbol sym, u32* base, i32* offset) {
 	if (sym->kind == SYM_LOCAL) {
 		*base = FP;
@@ -247,15 +249,61 @@ void sym_get_loc(Symbol sym, u32* base, i32* offset) {
 	}
 }
 
-u32 gen_assign(Symbol sym, Ast expr) {
+u32 gen_addr_expr(Ast expr, Type type) {
+	if (expr->kind == AST_NAME) {
+		u32 base;
+		i32 offset;
+		sym_get_loc(expr->sym, &base, &offset);
+		u32 r = get_reg_tmp();
+		if (expr->sym->flags & SYM_IS_REFERENCE) {
+			// reference variable, so its content is an address
+			// return that
+			emit_mem(LDW, r, base, offset);
+		} else {
+			// inline variable, so its base + offset is the
+			// address for its content
+			emit_opi(ADD, r, base, offset);
+		}
+		return r;
+	} else {
+		err_ast = expr;
+		error("gen_addr_expr cannot handle %s", ast_kind[expr->kind]);
+	}
+	return 0;
+}
+
+u32 gen_assign_expr(Ast expr, Symbol sym) {
+	if (sym->flags & SYM_IS_REFERENCE) {
+		fprintf(stderr,"AE REF\n");
+		return gen_addr_expr(expr, sym->type);
+	} else if (sym->type->kind == TYPE_POINTER) {
+		fprintf(stderr,"AE PTR\n");
+		return gen_addr_expr(expr, sym->type->base);
+	} else {
+		fprintf(stderr,"AE EXP\n");
+		return gen_expr(expr);
+	}
+}
+
+u32 gen_assign(Ast lhs, Ast expr) {
 	gen_trace("gen_assign()");
-	u32 base;
-	i32 offset;
-	sym_get_loc(sym, &base, &offset);
-	//XXX type compat
-	u32 r = gen_expr(expr);
-	emit_mem(STW, r, base, offset);
-	return r;
+
+	if ((lhs->kind == AST_LOCAL) ||
+	    (lhs->kind == AST_NAME)) {
+		u32 base;
+		i32 offset;
+		sym_get_loc(lhs->sym, &base, &offset);
+		//XXX type compat
+		u32 r = gen_assign_expr(expr, lhs->sym);
+		emit_mem(STW, r, base, offset);
+		return r;
+	} else if (lhs->kind == AST_INDEX) {
+		error("wip");
+	} else {
+		err_ast = lhs;
+		error("illegal on lhs (%s)", ast_kind[lhs->kind]);
+	}
+	return 0;
 }
 
 u32 reg_save(u32 base) {
@@ -294,6 +342,7 @@ u32 gen_call(Ast node) {
 	gen_trace("gen_call()");
 	Symbol sym = node->c0->sym;
 	Ast arg = node->c2;
+	Symbol param = sym->first;
 
 	if (sym->flags & SYM_IS_BUILTIN) {
 		u32 r = gen_expr(arg);
@@ -308,10 +357,17 @@ u32 gen_call(Ast node) {
 			u32 mask = reg_save(sizeargs);
 			u32 n = 0;
 			while (arg != nil) {
-				u32 r = gen_expr(arg);
+				u32 r;
+				if (param->flags & SYM_IS_REFERENCE) {
+					// XXX or ptr type?
+					r = gen_addr_expr(arg, param->type);
+				} else {
+					r = gen_expr(arg);
+				}
 				emit_mem(STW, r, SP, 4 * n);
 				put_reg(r);
 				arg = arg->c2;
+				param = param->next;
 				n = n + 1;
 			}
 			gen_branch_sym(AL|L, sym);
@@ -391,11 +447,13 @@ u32 gen_array_addr(Ast node) {
 		i32 offset;
 		sym_get_loc(node->sym, &base, &offset);
 		u32 r = get_reg_tmp();
-		if (node->sym->kind == SYM_PARAM) {
-			// arrays here are ptr-to-array, so deref that
+		if (node->sym->flags & SYM_IS_REFERENCE) {
+			// some symbols are tagged as by reference,
+			// in which case we load the address
 			emit_mem(LDW, r, base, offset);
 		} else {
-			// arrays elsewhere are inline, so just add offset
+			// otherwise the array is inline, so we
+			// just fixup the offset
 			emit_opi(ADD, r, base, offset);
 		}
 		return r;
@@ -451,7 +509,7 @@ u32 gen_expr(Ast node) {
 			if (node->c0->kind != AST_NAME) {
 				error("unhandled complex assignment");
 			}
-			return gen_assign(node->c0->sym, node->c1);
+			return gen_assign(node->c0, node->c1);
 		} else if ((op & tcMASK) == tcRELOP) {
 			return gen_relop(node, rel_op_to_cc_tab[op - tEQ]);
 		} else if ((op & tcMASK) == tcADDOP) {
@@ -584,7 +642,7 @@ void gen_stmt(Ast node) {
 		put_reg(r);
 	} else if (kind == AST_LOCAL) {
 		if (node->c0) {
-			u32 r = gen_assign(node->sym, node->c0);
+			u32 r = gen_assign(node, node->c0);
 			put_reg(r);
 		}
 	} else if (kind == AST_IF) {
