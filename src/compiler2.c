@@ -88,7 +88,6 @@ enum {
 	AST_ENUMDEF,  // c2=FIELD*
 	AST_FUNC,     // c0=BLOCK
 	AST_GLOBAL,   // c0=EXPR
-	AST_LOCAL,    // c0=NAME c1=EXPR?
 	AST_FIELD,
 };
 
@@ -97,7 +96,7 @@ str ast_kind[AST_FIELD + 1] = {
 	"BLOCK", "EXPR", "CALL", "WHILE", "IF",
 	"RETURN", "BREAK", "CONTINUE", "IFELSE",
 	"PROGRAM", "TYPEDEF", "ENUMDEF", "FUNCDEF",
-	"GLOBAL", "LOCAL", "FIELD",
+	"GLOBAL", "FIELD",
 };
 
 struct AstRec {
@@ -323,8 +322,8 @@ Ast ast_make_const(ast_t kind, u32 x, Type type) {
 	return ast_make(kind, x, nil, nil, type);
 }
 
-Ast ast_make_name(String name) {
-	return ast_make(AST_NAME, 0, name, nil, nil);
+Ast ast_make_name(String name, Symbol sym) {
+	return ast_make(AST_NAME, 0, name, sym, sym->type);
 }
 
 // ================================================================
@@ -1127,9 +1126,7 @@ Ast parse_operand() {
 		if (sym == nil) {
 			error("undefined identifier '%s'", ctx.ident->text);
 		}
-		node = ast_make_name(ctx.ident);
-		node->sym = sym;
-		node->type = sym->type;
+		node = ast_make_name(ctx.ident, sym);
 	} else {
 		error("invalid expression");
 	}
@@ -1510,14 +1507,11 @@ Ast parse_local_var() {
 		ctx.local_stack = ctx.alloc_stack;
 	}
 
-	Ast node = ast_make_simple(AST_LOCAL, 0);
-	node->name = name;
-	node->type = type;
-	node->sym = sym;
-
+	Ast node = nil;
 	if (ctx.tok == tASSIGN) {
 		next();
-		node->c0 = parse_expr();
+		node = ast_make_simple(AST_EXPR, 0);
+		node->c0 = ast_make_binop(tASSIGN, ast_make_name(name, sym), parse_expr());
 	}
 	require(tSEMI);
 
@@ -1644,8 +1638,11 @@ Ast parse_block() {
 		}
 
 		// append to block's list of statements
-		last->c2 = node;
-		last = node;
+		// some of these don't always return a node (like local var)
+		if (node != nil) {
+			last->c2 = node;
+			last = node;
+		}
 	}
 	return block;
 }

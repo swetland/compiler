@@ -282,11 +282,37 @@ u32 gen_assign_expr(Ast expr, Symbol sym) {
 	}
 }
 
+#if 0
+u32 gen_assign_loc(Ast lhs) {
+	if (lhs->kind == AST_NAME) {
+		u32 base;
+		i32 offset;
+		sym_get_loc(lhs->sym, &base, &offset);
+		r = get_reg_tmp();
+		if (lhs->sym->flags & SYM_IS_REFERNCE) {
+		gen_opi(ADD, r, base, offset);
+
+		return r;
+	} else if (lhs->kind == AST_INDEX) {
+		u32 ar = gen_assign_loc(lhs->c0);
+		u32 r = gen_expr(lhs->c1);
+
+		u32 lbase;
+		i32 loffset;
+		u32 kind = gen_assign_loc(lhs->c0, &lbase, &loffset);
+
+	} else if (lhs->kind == AST_DEREF) {
+	} else {
+		err_ast = lhs;
+		error("invalid lhs expr %s", ast_kind[lhs->kind]);
+	}
+}
+#endif
+
 u32 gen_assign(Ast lhs, Ast expr) {
 	gen_trace("gen_assign()");
 
-	if ((lhs->kind == AST_LOCAL) ||
-	    (lhs->kind == AST_NAME)) {
+	if (lhs->kind == AST_NAME) {
 		u32 base;
 		i32 offset;
 		sym_get_loc(lhs->sym, &base, &offset);
@@ -296,6 +322,8 @@ u32 gen_assign(Ast lhs, Ast expr) {
 		return r;
 	} else if (lhs->kind == AST_INDEX) {
 		error("wip");
+	} else if (lhs->kind == AST_DEREF) {
+
 	} else {
 		err_ast = lhs;
 		error("illegal on lhs (%s)", ast_kind[lhs->kind]);
@@ -503,9 +531,6 @@ u32 gen_expr(Ast node) {
 	} else if (node->kind == AST_BINOP) {
 		u32 op = node->ival;
 		if (op == tASSIGN) {
-			if (node->c0->kind != AST_NAME) {
-				error("unhandled complex assignment");
-			}
 			return gen_assign(node->c0, node->c1);
 		} else if ((op & tcMASK) == tcRELOP) {
 			return gen_relop(node, rel_op_to_cc_tab[op - tEQ]);
@@ -637,11 +662,6 @@ void gen_stmt(Ast node) {
 	if (kind == AST_EXPR) {
 		u32 r = gen_expr(node->c0);
 		put_reg(r);
-	} else if (kind == AST_LOCAL) {
-		if (node->c0) {
-			u32 r = gen_assign(node, node->c0);
-			put_reg(r);
-		}
 	} else if (kind == AST_IF) {
 		gen_if_else(node);
 	} else if (kind == AST_WHILE) {
