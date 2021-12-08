@@ -687,6 +687,25 @@ str tnames[] = {
 	"<SPC>", "<INV>", "<DQT>", "<SQT>", "<MSC>",
 };
 
+// used by ast graph printer
+str txnames[] = {
+	"<EOF>", "<EOL>", "{",  "}",  "[",   "]",   "(",   ")",
+	"eq",    "ne",    "lt", "le", "gt",  "ge",  "",    "",
+	"add",   "sub",   "or", "not","",    "",    "",    "",
+	"mul",   "div",   "mod","and","ann", "lsl", "lsr", "",
+	"add set", "sub set", "or set",  "not set", "", "", "", "",
+	"mul set", "div set", "mod set", "and set", "ann set", "lsl set", "lsr set", "",
+	";",  ":", "deref", ",", "bool not", "bool and", "bool or",  "bool not",
+	"set", "inc", "dec",
+	"type", "func", "struct", "var", "enum",
+	"if", "else", "while",
+	"break", "continue", "return",
+	"for", "switch", "case",
+	"true", "false", "nil",
+	"<ID>", "<NUM>", "<STR>",
+	"<SPC>", "<INV>", "<DQT>", "<SQT>", "<MSC>",
+};
+
 u8 lextab[256] = {
 	tEOF, tINV, tINV, tINV, tINV, tINV, tINV, tINV,
 	tINV, tSPC, tEOL, tSPC, tINV, tSPC, tINV, tINV,
@@ -1941,6 +1960,103 @@ void ast_dump(FILE* fp, Ast node, Ast mark) {
 	_ast_dump(fp, node, 0, true, mark);
 }
 
+void ast_dump_node_type(FILE* fp, Type type) {
+	if (type->sym != nil) {
+		fprintf(fp, "%s", type->sym->name->text);
+	} else if (type->kind == TYPE_ARRAY) {
+		fprintf(fp, "[%u]", type->len);
+		ast_dump_node_type(fp, type->base);
+	} else if (type->kind == TYPE_RECORD) {
+		fprintf(fp, "{...}");
+	} else {
+		fprintf(fp, "%s", type_kind[type->kind]);
+		if ((type->kind == TYPE_POINTER) || (type->kind == TYPE_SLICE)) {
+			ast_dump_node_type(fp, type->base);
+		}
+	}
+}
+
+void ast_dump_node(FILE* fp, Ast node, bool dump_c2) {
+	fprintf(fp, "\"%p\" [ label=<<TABLE BORDER=\"0\" CELLBORDER=\"1\" CELLSPACING=\"0\">\n", node);
+	fprintf(fp, "<TR><TD PORT=\"p0\" COLSPAN=\"3\">%s", ast_kind[node->kind]);
+	if ((node->kind == AST_BINOP) || (node->kind == AST_UNOP)) {
+		fprintf(fp, " %s", txnames[node->ival]);
+	} else if (node->kind == AST_U32) {
+		fprintf(fp, " 0x%x", node->ival);
+	} else if (node->name != nil) {
+		fprintf(fp, " %s", node->name->text);
+	} else if (node->ival) {
+		fprintf(fp, " %u", node->ival);
+	}
+	fprintf(fp, "</TD></TR>\n");
+	if (node->type) {
+		fprintf(fp, " ");
+		ast_dump_node_type(fp, node->type);
+		fprintf(fp, " |");
+	}
+	fprintf(fp, "<TR><TD PORT=\"c0\"></TD>"
+	        "<TD PORT=\"c1\"></TD>"
+	        "<TD PORT=\"c2\"></TD></TR></TABLE>>; ];\n");
+
+	if (node->c0 != nil) {
+		ast_dump_node(fp, node->c0, true);
+		fprintf(fp, "\"%p\":c0 -> \"%p\" [ ];\n", node, node->c0);
+	}
+	if (node->c1 != nil) {
+		ast_dump_node(fp, node->c1, true);
+		fprintf(fp, "\"%p\":c1 -> \"%p\" [ ];\n", node, node->c1);
+	}
+	if ((node->c2 != nil) && dump_c2) {
+		Ast list = node->c2;
+		Ast prev = node;
+		while (list != nil) {
+			ast_dump_node(fp, list, false);
+			fprintf(fp, "\"%p\":c2 -> \"%p\":p0 [ ];\n", prev, list);
+			list = list->c2;
+			prev = prev->c2;
+		}
+		fprintf(fp, "{ rank=same");
+		if (node->c0 != nil) {
+			fprintf(fp, " \"%p\"", node->c0);
+		}
+		if (node->c1 != nil) {
+			fprintf(fp, " \"%p\"", node->c1);
+		}
+		list = node->c2;
+		while (list != nil) {
+			fprintf(fp, " \"%p\"", list);
+			list = list->c2;
+		}
+		fprintf(fp," }\n");
+	}
+}
+
+void ast_dump_graph(FILE* fp, Ast node) {
+	fprintf(fp,
+"digraph g {\n"
+"graph [ rankdir=TB; ];\n"
+"node [ shape=plain; ];\n"
+);
+	ast_dump_node(fp, node, false);
+	fprintf(fp, "}\n");
+}
+
+void ast_dump_graphs(Ast node) {
+	node = node->c2;
+	while (node != nil) {
+		if (node->kind == AST_FUNC) {
+			char tmp[256];
+			sprintf(tmp, "%s.ast.dot", node->sym->name->text);
+			FILE* fp;
+			if ((fp = fopen(tmp, "w")) != nil) {
+				ast_dump_graph(fp, node);
+				fclose(fp);
+			}
+		}
+		node = node->c2;
+	}
+}
+
 #include "codegen-risc5-simple.c"
 
 #if 0
@@ -2042,6 +2158,7 @@ i32 main(int argc, args argv) {
 	str astname = nil;
 	bool dump = false;
 	bool scan_only = false;
+	bool dump_graphs = false;
 
 	ctx_init();
 	ctx.filename = "<commandline>";
@@ -2070,6 +2187,8 @@ i32 main(int argc, args argv) {
 			argv++;
 		} else if (!strcmp(argv[1], "-p")) {
 			dump = true;
+		} else if (!strcmp(argv[1], "-g")) {
+			dump_graphs = true;
 		} else if (!strcmp(argv[1], "-v")) {
 			ctx.flags |= cfTraceCodeGen;
 		} else if (!strcmp(argv[1], "-s")) {
@@ -2128,7 +2247,12 @@ i32 main(int argc, args argv) {
 		FILE *fp;
 		if ((fp = fopen(astname, "w")) != nil) {
 			ast_dump(fp, a, nil);
+			fclose(fp);
 		}
+	}
+
+	if (dump_graphs) {
+		ast_dump_graphs(a);
 	}
 
 	gen_risc5_simple(a);
