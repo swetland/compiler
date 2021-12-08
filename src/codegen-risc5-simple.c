@@ -274,13 +274,10 @@ u32 gen_addr_expr(Ast expr, Type type) {
 
 u32 gen_assign_expr(Ast expr, Symbol sym) {
 	if (sym->flags & SYM_IS_REFERENCE) {
-		fprintf(stderr,"AE REF\n");
 		return gen_addr_expr(expr, sym->type);
 	} else if (sym->type->kind == TYPE_POINTER) {
-		fprintf(stderr,"AE PTR\n");
 		return gen_addr_expr(expr, sym->type->base);
 	} else {
-		fprintf(stderr,"AE EXP\n");
 		return gen_expr(expr);
 	}
 }
