@@ -35,8 +35,11 @@ if bin/compiler -o "$bin" -l "$lst" "$src" 2> "$msg"; then
 		fi
 	fi
 else
+	if [[ $? > 127 ]]; then
+		echo "RUNTEST: $src: FAIL: compiler crashed"
+		cat "$msg"
 	# failure
-	if [[ "$txt" == *"-err"* ]]; then
+	elif [[ "$txt" == *"-err"* ]]; then
 		# but this was an error test, so...
 		echo "RUNTEST: $src: PASS"
 		echo "PASS: $src" > "$txt"
