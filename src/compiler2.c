@@ -62,8 +62,8 @@ struct StringRec {
 
 enum {
 // expression parts
-	AST_NAME,
-	AST_U32,
+	AST_SYMBOL,
+	AST_CONST,
 	AST_STRING,
 	AST_BINOP,    // c0=EXPR c1=EXPR
 	AST_UNOP,     // c0=EXPR
@@ -92,7 +92,7 @@ enum {
 };
 
 str ast_kind[AST_FIELD + 1] = {
-	"NAME", "U32", "STR", "BINOP", "UNOP", "DEREF", "INDEX",
+	"SYMBOL", "CONST", "STR", "BINOP", "UNOP", "DEREF", "INDEX",
 	"BLOCK", "EXPR", "CALL", "WHILE", "IF",
 	"RETURN", "BREAK", "CONTINUE", "IFELSE",
 	"PROGRAM", "TYPEDEF", "ENUMDEF", "FUNCDEF",
@@ -318,12 +318,12 @@ Ast ast_make_simple(ast_t kind, u32 x) {
 	return ast_make(kind, x, nil, nil, nil);
 }
 
-Ast ast_make_const(ast_t kind, u32 x, Type type) {
-	return ast_make(kind, x, nil, nil, type);
+Ast ast_make_const(u32 value, Type type) {
+	return ast_make(AST_CONST, value, nil, nil, type);
 }
 
 Ast ast_make_name(String name, Symbol sym) {
-	return ast_make(AST_NAME, 0, name, sym, sym->type);
+	return ast_make(AST_SYMBOL, 0, name, sym, sym->type);
 }
 
 // ================================================================
@@ -1045,9 +1045,9 @@ void require(token_t tok) {
 
 //TODO: handle overflow and div/mod-by-zero
 i32 ast_get_const_i32(Ast node) {
-	if (node->kind == AST_U32) {
+	if (node->kind == AST_CONST) {
 		return node->ival;
-	} else if (node->kind == AST_NAME) {
+	} else if (node->kind == AST_SYMBOL) {
 		if (node->sym->kind != SYM_CONST) {
 			error("non-const symbol (%s) in constexpr\n", node->sym->name);
 		}
@@ -1105,15 +1105,15 @@ Ast parse_expr();
 Ast parse_operand() {
 	Ast node = nil;
 	if (ctx.tok == tNUM) {
-		node = ast_make_const(AST_U32, ctx.num, ctx.type_i32);
+		node = ast_make_const(ctx.num, ctx.type_i32);
 	} else if (ctx.tok == tSTR) {
 		error("<TODO> string const");
 	} else if (ctx.tok == tTRUE) {
-		node = ast_make_const(AST_U32, 1, ctx.type_bool);
+		node = ast_make_const(1, ctx.type_bool);
 	} else if (ctx.tok == tFALSE) {
-		node = ast_make_const(AST_U32, 0, ctx.type_bool);
+		node = ast_make_const(0, ctx.type_bool);
 	} else if (ctx.tok == tNIL) {
-		node = ast_make_const(AST_U32, 0, ctx.type_nil);
+		node = ast_make_const(0, ctx.type_nil);
 	} else if (ctx.tok == tOPAREN) {
 		next();
 		node = parse_expr();
@@ -1140,10 +1140,15 @@ Ast parse_primary_expr() {
 		if (ctx.tok == tOPAREN) {
 			next();
 			//VALIDATE as func or ptr-to-func
+			if ((node->kind != AST_SYMBOL) ||
+			    (node->sym->kind != SYM_FUNC)) {
+				error("cannot call non-function");
+			}
 			u32 n = 0;
 
 			Ast call = ast_make_simple(AST_CALL, 0);
 			call->c0 = node;
+			call->type = node->sym->type->base;
 			Ast last = call;
 
 			while (ctx.tok != tCPAREN) {
@@ -1587,7 +1592,7 @@ Ast parse_expr_statement() {
 			op = tMINUS;
 		}
 		next();
-		right = ast_make_const(AST_U32, 1, ctx.type_i32);
+		right = ast_make_const(1, ctx.type_i32);
 		right = ast_make_binop(op, left, right);
 		node = ast_make_binop(tASSIGN, left, right);
 	} else {
@@ -1863,12 +1868,40 @@ Ast parse_program() {
 	}
 }
 
+void type_dump_compact(FILE* fp, Type type) {
+	if (type->kind == TYPE_FUNC) {
+		fprintf(fp, "fn(");
+		Symbol param = type->first;
+		while (param != nil) {
+			type_dump_compact(fp, param->type);
+			if (param->next != nil) {
+				fprintf(fp, ", ");
+			}
+			param = param->next;
+		}
+		fprintf(fp, ") -> ");
+		type_dump_compact(fp, type->base);
+	} else if (type->sym != nil) {
+		fprintf(fp, "%s", type->sym->name->text);
+	} else if (type->kind == TYPE_ARRAY) {
+		fprintf(fp, "[%u]", type->len);
+		type_dump_compact(fp, type->base);
+	} else if (type->kind == TYPE_RECORD) {
+		fprintf(fp, "{...}");
+	} else {
+		fprintf(fp, "%s", type_kind[type->kind]);
+		if ((type->kind == TYPE_POINTER) || (type->kind == TYPE_SLICE)) {
+			type_dump_compact(fp, type->base);
+		}
+	}
+}
+
 void ast_dump_syms(FILE* fp, Symbol sym, str tag, u32 indent) {
 	while (sym != nil) {
 		u32 i = 0;
 		while (i < indent) { fprintf(fp, "  "); i++; }
 		fprintf(fp, "%s '%s' ", tag, sym->name->text);
-		type_dump(fp, sym->type, true);
+		type_dump_compact(fp, sym->type);
 		fprintf(fp, "\n");
 		sym = sym->next;
 	}
@@ -1878,7 +1911,7 @@ void ast_dump_rtype(FILE* fp, Symbol sym, u32 indent) {
 	u32 i = 0;
 	while (i < indent) { fprintf(fp, "  "); i++; }
 	fprintf(fp, "Returns ");
-	type_dump(fp, sym->type->base, true);
+	type_dump_compact(fp, sym->type->base);
 	fprintf(fp, "\n");
 }
 
@@ -1894,27 +1927,35 @@ int _ast_dump(FILE* fp, Ast node, u32 indent, bool dumplist, Ast mark) {
 	indent = indent + 1;
 
 	fprintf(fp, "%s ", ast_kind[node->kind]);
-	if (node->kind == AST_NAME) {
-		fprintf(fp, "'%s'\n", node->name->text);
+	if (node->kind == AST_SYMBOL) {
+		fprintf(fp, "'%s' ", node->name->text);
+		if (node->type != nil) {
+			type_dump_compact(fp, node->type);
+		}
+		fprintf(fp, "\n");
 	} else if ((node->kind == AST_BINOP) || (node->kind == AST_UNOP)) {
-		fprintf(fp, "%s\n", tnames[node->ival]);
-	} else if (node->kind == AST_U32) {
-		fprintf(fp, "0x%x\n", node->ival);
+		fprintf(fp, "%s ", tnames[node->ival]);
+		if (node->type != nil) {
+			type_dump_compact(fp, node->type);
+		}
+		fprintf(fp, "\n");
+	} else if (node->kind == AST_CONST) {
+		fprintf(fp, "0x%x ", node->ival);
+		if (node->type != nil) {
+			type_dump_compact(fp, node->type);
+		}
+		fprintf(fp, "\n");
 	} else if (node->kind == AST_TYPEDEF) {
 		fprintf(fp, "'%s' ", node->name->text);
-		type_dump(fp, node->type, false);
+		type_dump_compact(fp, node->type);
 		fprintf(fp, "\n");
 	} else {
 		if (node->name) {
 			fprintf(fp,"'%s' ",node->name->text);
 		}
 		if (node->type) {
-			type_dump(fp, node->type, true);
+			type_dump_compact(fp, node->type);
 			fprintf(fp, " ");
-			//printf(fp, "<type %p> ", node->type);
-		}
-		if (node->sym) {
-			//printf(fp, "<sym@%p> ", node->sym);
 		}
 		if (node->ival) {
 			fprintf(fp,"%u", node->ival);
@@ -1957,28 +1998,12 @@ void ast_dump(FILE* fp, Ast node, Ast mark) {
 	_ast_dump(fp, node, 0, true, mark);
 }
 
-void ast_dump_node_type(FILE* fp, Type type) {
-	if (type->sym != nil) {
-		fprintf(fp, "%s", type->sym->name->text);
-	} else if (type->kind == TYPE_ARRAY) {
-		fprintf(fp, "[%u]", type->len);
-		ast_dump_node_type(fp, type->base);
-	} else if (type->kind == TYPE_RECORD) {
-		fprintf(fp, "{...}");
-	} else {
-		fprintf(fp, "%s", type_kind[type->kind]);
-		if ((type->kind == TYPE_POINTER) || (type->kind == TYPE_SLICE)) {
-			ast_dump_node_type(fp, type->base);
-		}
-	}
-}
-
 void ast_dump_node(FILE* fp, Ast node, bool dump_c2) {
 	fprintf(fp, "\"%p\" [ label=<<TABLE BORDER=\"0\" CELLBORDER=\"1\" CELLSPACING=\"0\">\n", node);
 	fprintf(fp, "<TR><TD PORT=\"p0\" COLSPAN=\"3\">%s", ast_kind[node->kind]);
 	if ((node->kind == AST_BINOP) || (node->kind == AST_UNOP)) {
 		fprintf(fp, " %s", txnames[node->ival]);
-	} else if (node->kind == AST_U32) {
+	} else if (node->kind == AST_CONST) {
 		fprintf(fp, " 0x%x", node->ival);
 	} else if (node->name != nil) {
 		fprintf(fp, " %s", node->name->text);
@@ -1987,9 +2012,9 @@ void ast_dump_node(FILE* fp, Ast node, bool dump_c2) {
 	}
 	fprintf(fp, "</TD></TR>\n");
 	if (node->type) {
-		fprintf(fp, " ");
-		ast_dump_node_type(fp, node->type);
-		fprintf(fp, " |");
+		fprintf(fp, "<TR><TD COLSPAN=\"3\">");
+		type_dump_compact(fp, node->type);
+		fprintf(fp, "</TD></TR>");
 	}
 	fprintf(fp, "<TR><TD PORT=\"c0\"></TD>"
 	        "<TD PORT=\"c1\"></TD>"

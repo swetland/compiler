@@ -250,7 +250,7 @@ void sym_get_loc(Symbol sym, u32* base, i32* offset) {
 }
 
 u32 gen_addr_expr(Ast expr, Type type) {
-	if (expr->kind == AST_NAME) {
+	if (expr->kind == AST_SYMBOL) {
 		u32 base;
 		i32 offset;
 		sym_get_loc(expr->sym, &base, &offset);
@@ -312,7 +312,7 @@ u32 gen_assign_loc(Ast lhs) {
 u32 gen_assign(Ast lhs, Ast expr) {
 	gen_trace("gen_assign()");
 
-	if (lhs->kind == AST_NAME) {
+	if (lhs->kind == AST_SYMBOL) {
 		u32 base;
 		i32 offset;
 		sym_get_loc(lhs->sym, &base, &offset);
@@ -467,7 +467,7 @@ u32 gen_array_addr(Ast node) {
 	if (node->type->kind != TYPE_ARRAY) {
 		error("cannot deref non-array type");
 	}
-	if (node->kind == AST_NAME) {
+	if (node->kind == AST_SYMBOL) {
 		u32 base;
 		i32 offset;
 		sym_get_loc(node->sym, &base, &offset);
@@ -512,11 +512,11 @@ u32 gen_expr(Ast node) {
 	err_ast = node;
 	gen_src_xref(node);
 	gen_trace("gen_expr()");
-	if (node->kind == AST_U32) {
+	if (node->kind == AST_CONST) {
 		u32 r = get_reg_tmp();
 		emit_movi(r, node->ival);
 		return r;
-	} else if (node->kind == AST_NAME) {
+	} else if (node->kind == AST_SYMBOL) {
 		u32 r = get_reg_tmp();
 		// XXX type checking here or before
 		if (node->sym->kind == SYM_CONST) {
