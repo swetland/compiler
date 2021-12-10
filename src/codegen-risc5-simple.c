@@ -255,9 +255,12 @@ u32 gen_addr_expr(Ast node) {
 		emit_mem(LDW, r, r, 0);
 		return r;
 	} else if (node->kind == AST_INDEX) {
+		u32 esz = node->type->size;
 		u32 raddr = gen_addr_expr(node->c0);
 		u32 roff = gen_expr(node->c1);
-		// MUL BY SIZE
+		if (esz > 1) {
+			emit_opi(MUL, roff, roff, esz);
+		}
 		emit_op(ADD, raddr, raddr, roff);
 		put_reg(roff);
 		return raddr;
@@ -289,8 +292,14 @@ u32 gen_assign(Ast lhs, Ast expr) {
 	u32 raddr = gen_addr_expr(lhs);
 	u32 rval = gen_expr(expr);
 
-	// WIDTH?!
-	emit_mem(STW, rval, raddr, 0);
+	if (lhs->type->size == 4) {
+		emit_mem(STW, rval, raddr, 0);
+	} else if (lhs->type->size == 1) {
+		emit_mem(STB, rval, raddr, 0);
+	} else {
+		err_ast = lhs;
+		error("unexpected size %u store", lhs->type->size);
+	}
 	put_reg(raddr);
 	return rval;
 }

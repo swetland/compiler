@@ -50,7 +50,7 @@ RISC5EMU_SRC := \
 
 bin/r5e: src/r5e.c src/risc5dis.c $(RISC5EMU_SRC)
 	@mkdir -p bin
-	$(CC) -o $@ $(CFLAGS) src/r5e.c src/risc5dis.c $(RISC5EMU_SRC)
+	$(CC) -o $@ $(CFLAGS) -O2 src/r5e.c src/risc5dis.c $(RISC5EMU_SRC)
 
 bin/mkinstab: src/mkinstab.c
 	@mkdir -p bin
