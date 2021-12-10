@@ -149,7 +149,7 @@ void emit_bi(u32 op, u32 off) {
 
 u8 rel_op_to_cc_tab[6] = { EQ, NE, LT, LE, GT, GE };
 u32 add_op_to_ins_tab[4] = { ADD, SUB, IOR, XOR };
-u32 mul_op_to_ins_tab[7] = { MUL, DIV, MOD, AND, ANN, LSL, ASR };
+u32 mul_op_to_ins_tab[6] = { MUL, DIV, MOD, AND, LSL, ASR };
 
 // ------------------------------------------------------------------
 
@@ -400,7 +400,7 @@ u32 gen_relop(Ast node, u32 cc) {
 	return res;
 }
 
-u32 gen_logical_op(Ast node, u32 cc, u32 sc) {
+u32 gen_short_circuit_op(Ast node, u32 cc, u32 sc) {
 	u32 r = gen_expr(node->c0);
 	emit_mov(R11, r); // set z flag
 	put_reg(r);
@@ -459,11 +459,12 @@ u32 gen_expr(Ast node) {
 	err_ast = node;
 	gen_src_xref(node);
 	gen_trace("gen_expr()");
-	if (node->kind == AST_CONST) {
+	u32 kind = node->kind;
+	if (kind == AST_CONST) {
 		u32 r = get_reg_tmp();
 		emit_movi(r, node->ival);
 		return r;
-	} else if (node->kind == AST_SYMBOL) {
+	} else if (kind == AST_SYMBOL) {
 		u32 r = get_reg_tmp();
 		// XXX type checking here or before
 		if (node->sym->kind == SYM_CONST) {
@@ -475,42 +476,36 @@ u32 gen_expr(Ast node) {
 			emit_mem(LDW, r, base, offset);
 		}
 		return r;
-	} else if (node->kind == AST_BINOP) {
-		u32 op = node->ival;
-		if (op == tASSIGN) {
-			return gen_assign(node->c0, node->c1);
-		} else if ((op & tcMASK) == tcRELOP) {
-			return gen_relop(node, rel_op_to_cc_tab[op - tEQ]);
-		} else if ((op & tcMASK) == tcADDOP) {
-			return gen_binop(node, add_op_to_ins_tab[op - tPLUS]);
-		} else if ((op & tcMASK) == tcMULOP) {
-			return gen_binop(node, mul_op_to_ins_tab[op - tSTAR]);
-		} else if (op == tOR) {
-			return gen_logical_op(node, NE, 1);
-		} else if (op == tAND) {
-			return gen_logical_op(node, EQ, 0);
-		} else {
-			error("gen_expr cannot handle binop %s\n", tnames[op]);
-		}
-	} else if (node->kind == AST_UNOP) {
-		u32 op = node->ival;
+	} else if (ast_kind_is_relop(kind)) {
+		return gen_relop(node, rel_op_to_cc_tab[kind - AST_EQ]);
+	} else if (ast_kind_is_addop(kind)) {
+		return gen_binop(node, add_op_to_ins_tab[kind - AST_ADD]);
+	} else if (ast_kind_is_mulop(kind)) {
+		return gen_binop(node, mul_op_to_ins_tab[kind - AST_MUL]);
+	} else if (kind == AST_BOOL_OR) {
+		return gen_short_circuit_op(node, NE, 1);
+	} else if (kind == AST_BOOL_AND) {
+		return gen_short_circuit_op(node, EQ, 0);
+	} else if (kind == AST_ASSIGN) {
+		return gen_assign(node->c0, node->c1);
+	} else if (kind == AST_NEG) {
 		u32 r = gen_expr(node->c0);
-		if (op == tMINUS) {
-			emit_movi(R11, 0);
-			emit_op(SUB, r, R11, r);
-		} else if (op == tNOT) {
-			emit_opi(XOR, r, r, 0xffffffff);
-		} else if (op == tBANG) {
-			emit_opi(XOR, r, r, r);
-		} else {
-			error("gen_expr cannot handle unop %s\n", tnames[op]);
-		}
+		emit_movi(R11, 0);
+		emit_op(SUB, r, R11, r);
 		return r;
-	} else if (node->kind == AST_CALL) {
+	} else if (kind == AST_NOT) {
+		u32 r = gen_expr(node->c0);
+		emit_opi(XOR, r, r, 0xffffffff);
+		return r;
+	} else if (kind == AST_BOOL_NOT) {
+		u32 r = gen_expr(node->c0);
+		emit_opi(XOR, r, r, r);
+		return r;
+	} else if (kind == AST_CALL) {
 		return gen_call(node);
-	} else if (node->kind == AST_INDEX) {
+	} else if (kind == AST_INDEX) {
 		return gen_array_read(node);
-	} else if (node->kind == AST_FIELD) {
+	} else if (kind == AST_FIELD) {
 		return gen_struct_read(node);
 	} else {
 		error("gen_expr cannot handle %s\n", ast_kind[node->kind]);

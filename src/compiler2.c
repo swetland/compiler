@@ -61,40 +61,66 @@ struct StringRec {
 };
 
 enum {
-// expression parts
-	AST_SYMBOL,
-	AST_CONST,
-	AST_STRING,
-	AST_BINOP,    // c0=EXPR c1=EXPR
-	AST_UNOP,     // c0=EXPR
-	AST_DEREF,    // c0=EXPR type: pointer-to-...
-	AST_INDEX,    // c0=EXPR type: array-of-...  c1=EXPR index
-	AST_FIELD,    // c0=EXPR type: struct        c1=SYMBOL field
-	AST_ADDROF,   // c0=EXPR type: lvalue
+// top node
+	AST_PROGRAM,  // c2=FUNC*
+// program components (chained into a list by c2)
+	AST_FUNC,     // c0=BLOCK
 // container of statements
 	AST_BLOCK,    // c0=STMT
 // statements (chained into a list by c2)
 	AST_EXPR,     // c0=EXPR
-	AST_CALL,     // c0=NAME c2=EXPR*
 	AST_WHILE,    // c0=EXPR c1=BLOCK
-	AST_IF,       // c0=IFELSE
-	AST_RETURN,   // c0=EXPR
 	AST_BREAK,
 	AST_CONTINUE,
+	AST_RETURN,   // c0=EXPR
+	AST_IF,       // c0=IFELSE
 // sub-part of if
 	AST_IFELSE,   // c0=EXPR c1=BLOCKthen c2=BLOCKelse|IFELSE
-// program components (chained into a list by c2)
-	AST_FUNC,     // c0=BLOCK
-// top node
-	AST_PROGRAM,  // c2=(TYPEDEF | ENUMDEF | FUNC | GLOBAL)*
+// expression parts
+	AST_SYMBOL,
+	AST_CONST,
+	AST_STRING,
+	AST_DEREF,    // c0=EXPR type: pointer-to-...
+	AST_INDEX,    // c0=EXPR type: array-of-...  c1=EXPR index
+	AST_FIELD,    // c0=EXPR type: struct        c1=SYMBOL field
+	AST_ADDROF,   // c0=EXPR type: lvalue
+	AST_CALL,     // c0=NAME c2=EXPR*
+	AST_ASSIGN,
+
+	// Rel Ops (maintain order matched w/ lexer)
+	AST_EQ, AST_NE, AST_LT, AST_LE, AST_GT, AST_GE,
+	// Add Ops (maintain order matched w/ lexer)
+	AST_ADD, AST_SUB, AST_OR, AST_XOR,
+	// Mul Ops (maintain order matched w/ lexer)
+	AST_MUL, AST_DIV, AST_MOD, AST_AND, AST_LSL, AST_LSR,
+	// uncategorized ops
+	AST_NOT, AST_BOOL_AND, AST_BOOL_OR, AST_BOOL_NOT, AST_NEG,
+	AST_KIND_COUNT
 };
 
-str ast_kind[AST_PROGRAM + 1] = {
-	"SYMBOL", "CONST", "STR", "BINOP", "UNOP",
-	"DEREF", "INDEX", "FIELD", "ADDROF",
-	"BLOCK", "EXPR", "CALL", "WHILE", "IF",
-	"RETURN", "BREAK", "CONTINUE", "IFELSE",
-	"FUNC", "PROGRAM",
+bool ast_kind_is_relop(u32 kind) {
+	return (kind >= AST_EQ) && (kind <= AST_GE);
+}
+bool ast_kind_is_addop(u32 kind) {
+	return (kind >= AST_ADD) && (kind <= AST_XOR);
+}
+bool ast_kind_is_mulop(u32 kind) {
+	return (kind >= AST_MUL) && (kind <= AST_LSR);
+}
+bool ast_kind_is_binop(u32 kind) {
+	return (kind >= AST_EQ) && (kind <= AST_LSR);
+}
+
+str ast_kind[AST_KIND_COUNT] = {
+	"PROGRAM", "FUNC",
+	"BLOCK", "EXPR", "WHILE", "BREAK", "CONTINUE",
+	"RETURN", "IF", "IFELSE",
+	"SYMBOL", "CONST", "STR",
+	"DEREF", "INDEX", "FIELD", "ADDROF", "CALL", "ASSIGN",
+	"EQ", "NE", "LT", "LE", "GT", "GE",
+	"ADD", "SUB", "OR", "XOR",
+	"MUL", "DIV", "MOD", "AND", "LSL", "LSR",
+	"NOT", "BOOL AND", "BOOL OR", "BOOL NOT", "NEG",
 };
 
 struct AstRec {
@@ -298,15 +324,15 @@ Ast ast_make(ast_t kind, u32 ival, String name, Symbol sym, Type type) {
 	return a;
 }
 
-Ast ast_make_binop(u32 op, Ast left, Ast right) {
-	Ast node = ast_make(AST_BINOP, op, nil, nil, nil);
+Ast ast_make_binop(u32 kind, Ast left, Ast right) {
+	Ast node = ast_make(kind, 0, nil, nil, nil);
 	node->c0 = left;
 	node->c1 = right;
 	return node;
 }
 
-Ast ast_make_unop(u32 op, Ast child) {
-	Ast node = ast_make(AST_UNOP, op, nil, nil, nil);
+Ast ast_make_unop(u32 kind, Ast child) {
+	Ast node = ast_make(kind, 0, nil, nil, nil);
 	node->c0 = child;
 	return node;
 }
@@ -672,10 +698,10 @@ enum {
 	// AddOps (do not reorder)
 	tPLUS, tMINUS, tPIPE, tCARET, tx14, tx15, tx16, tx17,
 	// MulOps (do not reorder)
-	tSTAR, tSLASH, tPERCENT, tAMP, tANDNOT, tLEFT, tRIGHT, tx1F,
+	tSTAR, tSLASH, tPERCENT, tAMP, tLEFT, tRIGHT, tx1E, tx1F,
 	// AsnOps (do not reorder)
 	tADDEQ, tSUBEQ, tOREQ, tXOREQ, tx24, tx25, tx26, tx27,
-	tMULEQ, tDIVEQ, tMODEQ, tANDEQ, tANNEQ, tLSEQ, tRSEQ, t2F,
+	tMULEQ, tDIVEQ, tMODEQ, tANDEQ, tLSEQ, tRSEQ, t2E, t2F,
 	// Various, UnaryNot, LogicalOps,
 	tSEMI, tCOLON, tDOT, tCOMMA, tNOT, tAND, tOR, tBANG,
 	tASSIGN, tINC, tDEC,
@@ -699,25 +725,6 @@ str tnames[] = {
 	"*=",    "/=",    "%=", "&=", "&~=", "<<=", ">>=", "",
 	";",     ":",     ".",  ",",  "~",   "&&",  "||",  "!",
 	"=",     "++",    "--",
-	"type", "func", "struct", "var", "enum",
-	"if", "else", "while",
-	"break", "continue", "return",
-	"for", "switch", "case",
-	"true", "false", "nil",
-	"<ID>", "<NUM>", "<STR>",
-	"<SPC>", "<INV>", "<DQT>", "<SQT>", "<MSC>",
-};
-
-// used by ast graph printer
-str txnames[] = {
-	"<EOF>", "<EOL>", "{",  "}",  "[",   "]",   "(",   ")",
-	"eq",    "ne",    "lt", "le", "gt",  "ge",  "",    "",
-	"add",   "sub",   "or", "not","",    "",    "",    "",
-	"mul",   "div",   "mod","and","ann", "lsl", "lsr", "",
-	"add set", "sub set", "or set",  "not set", "", "", "", "",
-	"mul set", "div set", "mod set", "and set", "ann set", "lsl set", "lsr set", "",
-	";",  ":", "deref", ",", "bool not", "bool and", "bool or",  "bool not",
-	"set", "inc", "dec",
 	"type", "func", "struct", "var", "enum",
 	"if", "else", "while",
 	"break", "continue", "return",
@@ -965,7 +972,6 @@ token_t _next() {
 			if (nc == '-') { tok = tDEC; nc = scan(); }
 		} else if (tok == tAMP) {
 			if (nc == '&') { tok = tAND; nc = scan(); }
-			else if (nc == '~') { tok = tANDNOT; nc = scan(); }
 		} else if (tok == tPIPE) {
 			if (nc == '|') { tok = tOR; nc = scan(); }
 		} else if (tok == tGT) {
@@ -1074,39 +1080,39 @@ i32 ast_get_const_i32(Ast node) {
 			error("non-const symbol (%s) in constexpr\n", node->sym->name);
 		}
 		return node->sym->value;
-	} else if (node->kind == AST_BINOP) {
+	} else if (ast_kind_is_binop(node->kind)) {
 		i32 left = ast_get_const_i32(node->c0);
 		i32 right = ast_get_const_i32(node->c1);
-		u32 op = node->ival;
-		if (op == tPLUS) {
+		u32 op = node->kind;
+		if (op == AST_ADD) {
 			return left + right;
-		} else if (op == tMINUS) {
+		} else if (op == AST_SUB) {
 			return left - right;
-		} else if (op == tSTAR) {
+		} else if (op == AST_MUL) {
 			return left * right;
-		} else if (op == tSLASH) {
+		} else if (op == AST_DIV) {
 			return left / right;
-		} else if (op == tPERCENT) {
+		} else if (op == AST_MOD) {
 			return left % right;
-		} else if (op == tAMP) {
+		} else if (op == AST_AND) {
 			return left & right;
-		} else if (op == tPIPE) {
+		} else if (op == AST_OR) {
 			return left | right;
+		} else if (op == AST_XOR) {
+			return left | right;
+		} else if (op == AST_BOOL_AND) {
+			return left && right;
+		} else if (op == AST_BOOL_OR) {
+			return left || right;
 		} else {
-			error("unsupported const BINOP %s\n", tnames[op]);
+			error("unsupported const op %s\n", ast_kind[op]);
 		}
-	} else if (node->kind == AST_UNOP) {
-		i32 left = ast_get_const_i32(node->c0);
-		u32 op = node->ival;
-		if (op == tPLUS) {
-			return left;
-		} else if (op == tMINUS) {
-			return -left;
-		} else if (op == tBANG) {
-			return !left;
-		} else {
-			error("unsupported const UNOP %s\n", tnames[op]);
-		}
+	} else if (node->kind == AST_NEG) {
+		return -ast_get_const_i32(node->c0);
+	} else if (node->kind == AST_NOT) {
+		return ~ast_get_const_i32(node->c0);
+	} else if (node->kind == AST_BOOL_NOT) {
+		return !ast_get_const_i32(node->c0);
 	} else {
 		error("non-const expr (%s)\n", ast_kind[node->kind]);
 	}
@@ -1152,7 +1158,7 @@ Ast ast_require_struct_type(Ast node) {
 	}
 	if ((node->type->kind == TYPE_POINTER) &&
 	    (node->type->base->kind == TYPE_RECORD)) {
-	    	return ast_make_deref(node);
+		return ast_make_deref(node);
 	}
 	error("expected a struct");
 	return nil;
@@ -1279,19 +1285,25 @@ Ast parse_unary_expr() {
 	if (op == tPLUS) {
 		next();
 		return parse_unary_expr();
-	} else if ((op == tMINUS) || (op == tBANG) || (op == tNOT) || (op == tAMP)) {
-		u32 op = ctx.tok;
+	} else if (op == tMINUS) {
 		next();
-		Ast node = ast_make_unop(op, parse_unary_expr());
-		if (op == tAMP) {
-			node->type = type_make_ptr(node->c0->type);
-			node->kind = AST_ADDROF;
-			node->ival = 0;
-		} else if (op == tBANG) {
-			ast_type_compat(node, ctx.type_bool);
-		} else {
-			ast_type_compat(node, ctx.type_i32);
-		}
+		Ast node = ast_make_unop(AST_NEG, parse_unary_expr());
+		ast_type_compat(node, ctx.type_i32);
+		return node;
+	} else if (op == tBANG) {
+		next();
+		Ast node = ast_make_unop(AST_BOOL_NOT, parse_unary_expr());
+		ast_type_compat(node, ctx.type_bool);
+		return node;
+	} else if (op == tNOT) {
+		next();
+		Ast node = ast_make_unop(AST_NOT, parse_unary_expr());
+		ast_type_compat(node, ctx.type_i32);
+		return node;
+	} else if (op == tAMP) {
+		next();
+		Ast node = ast_make_unop(AST_ADDROF, parse_unary_expr());
+		node->type = type_make_ptr(node->c0->type);
 		return node;
 	} else {
 		return parse_primary_expr();
@@ -1301,7 +1313,7 @@ Ast parse_unary_expr() {
 Ast parse_mul_expr() {
 	Ast node = parse_unary_expr();
 	while ((ctx.tok & tcMASK) == tcMULOP) {
-		u32 op = ctx.tok;
+		u32 op = (ctx.tok - tSTAR) + AST_MUL;
 		next();
 		node = ast_make_binop(op, node, parse_unary_expr());
 		ast_type_compat(node, ctx.type_i32);
@@ -1312,7 +1324,7 @@ Ast parse_mul_expr() {
 Ast parse_add_expr() {
 	Ast node = parse_mul_expr();
 	while ((ctx.tok & tcMASK) == tcADDOP) {
-		u32 op = ctx.tok;
+		u32 op = (ctx.tok - tPLUS) + AST_ADD;
 		next();
 		node = ast_make_binop(op, node, parse_mul_expr());
 		ast_type_compat(node, ctx.type_i32);
@@ -1323,7 +1335,7 @@ Ast parse_add_expr() {
 Ast parse_rel_expr() {
 	Ast node = parse_add_expr();
 	if ((ctx.tok & tcMASK) == tcRELOP) {
-		u32 op = ctx.tok;
+		u32 op = (ctx.tok - tEQ) + AST_EQ;
 		next();
 		node = ast_make_binop(op, node, parse_add_expr());
 		ast_type_compat(node, ctx.type_bool);
@@ -1332,12 +1344,11 @@ Ast parse_rel_expr() {
 }
 
 Ast parse_and_expr() {
-	// XXX needs to handle short-circuit codegen etc
 	Ast node = parse_rel_expr();
 	if (ctx.tok == tAND) {
 		while (ctx.tok == tAND) {
 			next();
-			node = ast_make_binop(tAND, node, parse_rel_expr());
+			node = ast_make_binop(AST_BOOL_AND, node, parse_rel_expr());
 			ast_type_compat(node, ctx.type_bool);
 		}
 	}
@@ -1349,7 +1360,7 @@ Ast parse_expr() {
 	if (ctx.tok == tOR) {
 		while (ctx.tok == tOR) {
 			next();
-			node = ast_make_binop(tOR, node, parse_and_expr());
+			node = ast_make_binop(AST_BOOL_OR, node, parse_and_expr());
 			ast_type_compat(node, ctx.type_bool);
 		}
 	}
@@ -1618,7 +1629,7 @@ Ast parse_local_var() {
 	if (ctx.tok == tASSIGN) {
 		next();
 		node = ast_make_simple(AST_EXPR, 0);
-		node->c0 = ast_make_binop(tASSIGN, ast_make_symbol(name, sym), parse_expr());
+		node->c0 = ast_make_binop(AST_ASSIGN, ast_make_symbol(name, sym), parse_expr());
 		node->c0->type = node->c0->c1->type;
 	}
 	require(tSEMI);
@@ -1670,7 +1681,7 @@ Ast parse_expr_statement() {
 	if (ctx.tok == tASSIGN) {
 		next();
 		right = parse_expr();
-		node = ast_make_binop(tASSIGN, left, right);
+		node = ast_make_binop(AST_ASSIGN, left, right);
 		node->type = node->c1->type;
 	} else if ((ctx.tok & tcMASK) == tcAEQOP) {
 		u32 op = ctx.tok; // - tADDEQ;
@@ -1687,15 +1698,15 @@ Ast parse_expr_statement() {
 	} else if ((ctx.tok == tINC) || (ctx.tok == tDEC)) {
 		u32 op;
 		if (ctx.tok == tINC) {
-			op = tPLUS;
+			op = AST_ADD;
 		} else {
-			op = tMINUS;
+			op = AST_SUB;
 		}
 		next();
 		right = ast_make_const(1, ctx.type_i32);
 		right = ast_make_binop(op, left, right);
 		right->type = ctx.type_i32;
-		node = ast_make_binop(tASSIGN, left, right);
+		node = ast_make_binop(AST_ASSIGN, left, right);
 		node->type = ctx.type_i32;
 		// TODO: check type?
 	} else {
@@ -2025,12 +2036,6 @@ int _ast_dump(FILE* fp, Ast node, u32 indent, bool dumplist, Ast mark) {
 			type_dump_compact(fp, node->type);
 		}
 		fprintf(fp, "\n");
-	} else if ((node->kind == AST_BINOP) || (node->kind == AST_UNOP)) {
-		fprintf(fp, "%s ", tnames[node->ival]);
-		if (node->type != nil) {
-			type_dump_compact(fp, node->type);
-		}
-		fprintf(fp, "\n");
 	} else if (node->kind == AST_CONST) {
 		fprintf(fp, "0x%x ", node->ival);
 		if (node->type != nil) {
@@ -2089,9 +2094,7 @@ void ast_dump(FILE* fp, Ast node, Ast mark) {
 void ast_dump_node(FILE* fp, Ast node, bool dump_c2) {
 	fprintf(fp, "\"%p\" [ label=<<TABLE BORDER=\"0\" CELLBORDER=\"1\" CELLSPACING=\"0\">\n", node);
 	fprintf(fp, "<TR><TD PORT=\"p0\" COLSPAN=\"3\">%s", ast_kind[node->kind]);
-	if ((node->kind == AST_BINOP) || (node->kind == AST_UNOP)) {
-		fprintf(fp, " %s", txnames[node->ival]);
-	} else if (node->kind == AST_CONST) {
+	if (node->kind == AST_CONST) {
 		fprintf(fp, " 0x%x", node->ival);
 	} else if (node->name != nil) {
 		fprintf(fp, " %s", node->name->text);
