@@ -249,86 +249,50 @@ void sym_get_loc(Symbol sym, u32* base, i32* offset) {
 	}
 }
 
-u32 gen_addr_expr(Ast expr, Type type) {
-	if (expr->kind == AST_SYMBOL) {
+u32 gen_addr_expr(Ast node) {
+	if (node->kind == AST_DEREF) {
+		u32 r = gen_addr_expr(node->c0);
+		emit_mem(LDW, r, r, 0);
+		return r;
+	} else if (node->kind == AST_INDEX) {
+		u32 raddr = gen_addr_expr(node->c0);
+		u32 roff = gen_expr(node->c1);
+		// MUL BY SIZE
+		emit_op(ADD, raddr, raddr, roff);
+		put_reg(roff);
+		return raddr;
+	} else if (node->kind == AST_FIELD) {
+		u32 raddr = gen_addr_expr(node->c0);
+		u32 off = node->c1->sym->value;
+		// HANDLE non-word-sized
+		emit_opi(ADD, raddr, raddr, off);
+		return raddr;
+	} else if (node->kind == AST_SYMBOL) {
 		u32 base;
 		i32 offset;
-		sym_get_loc(expr->sym, &base, &offset);
+		sym_get_loc(node->sym, &base, &offset);
 		u32 r = get_reg_tmp();
-		if (expr->sym->flags & SYM_IS_REFERENCE) {
-			// reference variable, so its content is an address
-			// return that
-			emit_mem(LDW, r, base, offset);
-		} else {
-			// inline variable, so its base + offset is the
-			// address for its content
-			emit_opi(ADD, r, base, offset);
-		}
+		emit_opi(ADD, r, base, offset);
 		return r;
+	} else if (node->kind == AST_ADDROF) {
+		return gen_addr_expr(node->c0);
 	} else {
-		err_ast = expr;
-		error("gen_addr_expr cannot handle %s", ast_kind[expr->kind]);
+		err_ast = node;
+		error("gen_addr_expr cannot handle %s", ast_kind[node->kind]);
 	}
 	return 0;
 }
-
-u32 gen_assign_expr(Ast expr, Symbol sym) {
-	if (sym->flags & SYM_IS_REFERENCE) {
-		return gen_addr_expr(expr, sym->type);
-	} else if (sym->type->kind == TYPE_POINTER) {
-		return gen_addr_expr(expr, sym->type->base);
-	} else {
-		return gen_expr(expr);
-	}
-}
-
-#if 0
-u32 gen_assign_loc(Ast lhs) {
-	if (lhs->kind == AST_NAME) {
-		u32 base;
-		i32 offset;
-		sym_get_loc(lhs->sym, &base, &offset);
-		r = get_reg_tmp();
-		if (lhs->sym->flags & SYM_IS_REFERNCE) {
-		gen_opi(ADD, r, base, offset);
-
-		return r;
-	} else if (lhs->kind == AST_INDEX) {
-		u32 ar = gen_assign_loc(lhs->c0);
-		u32 r = gen_expr(lhs->c1);
-
-		u32 lbase;
-		i32 loffset;
-		u32 kind = gen_assign_loc(lhs->c0, &lbase, &loffset);
-
-	} else if (lhs->kind == AST_DEREF) {
-	} else {
-		err_ast = lhs;
-		error("invalid lhs expr %s", ast_kind[lhs->kind]);
-	}
-}
-#endif
 
 u32 gen_assign(Ast lhs, Ast expr) {
 	gen_trace("gen_assign()");
 
-	if (lhs->kind == AST_SYMBOL) {
-		u32 base;
-		i32 offset;
-		sym_get_loc(lhs->sym, &base, &offset);
-		//XXX type compat
-		u32 r = gen_assign_expr(expr, lhs->sym);
-		emit_mem(STW, r, base, offset);
-		return r;
-	} else if (lhs->kind == AST_INDEX) {
-		error("wip");
-	} else if (lhs->kind == AST_DEREF) {
+	u32 raddr = gen_addr_expr(lhs);
+	u32 rval = gen_expr(expr);
 
-	} else {
-		err_ast = lhs;
-		error("illegal on lhs (%s)", ast_kind[lhs->kind]);
-	}
-	return 0;
+	// WIDTH?!
+	emit_mem(STW, rval, raddr, 0);
+	put_reg(raddr);
+	return rval;
 }
 
 u32 reg_save(u32 base) {
@@ -383,9 +347,9 @@ u32 gen_call(Ast node) {
 			u32 n = 0;
 			while (arg != nil) {
 				u32 r;
-				if (param->flags & SYM_IS_REFERENCE) {
+				if (param->type->kind == TYPE_POINTER) {
 					// XXX or ptr type?
-					r = gen_addr_expr(arg, param->type);
+					r = gen_addr_expr(arg);
 				} else {
 					r = gen_expr(arg);
 				}
@@ -409,10 +373,6 @@ u32 gen_call(Ast node) {
 	u32 r = get_reg_tmp();
 	emit_mov(r, R0);
 	return r;
-}
-
-u32 gen_lexpr(Ast node) {
-	return 0;
 }
 
 u32 gen_binop(Ast node, u32 op) {
@@ -462,36 +422,8 @@ u32 gen_logical_op(Ast node, u32 cc, u32 sc) {
 	return r;
 }
 
-u32 gen_array_addr(Ast node) {
-	err_ast = node;
-	if (node->type->kind != TYPE_ARRAY) {
-		error("cannot deref non-array type");
-	}
-	if (node->kind == AST_SYMBOL) {
-		u32 base;
-		i32 offset;
-		sym_get_loc(node->sym, &base, &offset);
-		u32 r = get_reg_tmp();
-		if (node->sym->flags & SYM_IS_REFERENCE) {
-			// some symbols are tagged as by reference,
-			// in which case we load the address
-			emit_mem(LDW, r, base, offset);
-		} else {
-			// otherwise the array is inline, so we
-			// just fixup the offset
-			emit_opi(ADD, r, base, offset);
-		}
-		return r;
-	} else if (node->kind == AST_INDEX) {
-		error("not ready for [][]");
-	} else {
-		error("cannot dereference this");
-	}
-	return 0;
-}
-
 u32 gen_array_read(Ast node) {
-	u32 raddr = gen_array_addr(node->c0);
+	u32 raddr = gen_addr_expr(node->c0);
 	u32 roff = gen_expr(node->c1);
 
 	u32 sz = node->c0->type->base->size;
@@ -506,6 +438,21 @@ u32 gen_array_read(Ast node) {
 	}
 	put_reg(raddr);
 	return roff;
+}
+
+u32 gen_struct_read(Ast node) {
+	u32 raddr = gen_addr_expr(node->c0);
+	u32 off = node->c1->sym->value;
+	u32 sz = node->c1->type->size;
+	if (sz == 1) {
+		emit_mem(LDB, raddr, raddr, off);
+	} else if (sz == 4) {
+		emit_mem(LDW, raddr, raddr, off);
+	} else {
+		err_ast = node;
+		error("unsupported field size");
+	}
+	return raddr;
 }
 
 u32 gen_expr(Ast node) {
@@ -563,6 +510,8 @@ u32 gen_expr(Ast node) {
 		return gen_call(node);
 	} else if (node->kind == AST_INDEX) {
 		return gen_array_read(node);
+	} else if (node->kind == AST_FIELD) {
+		return gen_struct_read(node);
 	} else {
 		error("gen_expr cannot handle %s\n", ast_kind[node->kind]);
 	}

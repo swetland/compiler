@@ -67,8 +67,10 @@ enum {
 	AST_STRING,
 	AST_BINOP,    // c0=EXPR c1=EXPR
 	AST_UNOP,     // c0=EXPR
-	AST_DEREF,
-	AST_INDEX,
+	AST_DEREF,    // c0=EXPR type: pointer-to-...
+	AST_INDEX,    // c0=EXPR type: array-of-...  c1=EXPR index
+	AST_FIELD,    // c0=EXPR type: struct        c1=SYMBOL field
+	AST_ADDROF,   // c0=EXPR type: lvalue
 // container of statements
 	AST_BLOCK,    // c0=STMT
 // statements (chained into a list by c2)
@@ -81,22 +83,18 @@ enum {
 	AST_CONTINUE,
 // sub-part of if
 	AST_IFELSE,   // c0=EXPR c1=BLOCKthen c2=BLOCKelse|IFELSE
+// program components (chained into a list by c2)
+	AST_FUNC,     // c0=BLOCK
 // top node
 	AST_PROGRAM,  // c2=(TYPEDEF | ENUMDEF | FUNC | GLOBAL)*
-// program components (chained into a list by c2)
-	AST_TYPEDEF,
-	AST_ENUMDEF,  // c2=FIELD*
-	AST_FUNC,     // c0=BLOCK
-	AST_GLOBAL,   // c0=EXPR
-	AST_FIELD,
 };
 
-str ast_kind[AST_FIELD + 1] = {
-	"SYMBOL", "CONST", "STR", "BINOP", "UNOP", "DEREF", "INDEX",
+str ast_kind[AST_PROGRAM + 1] = {
+	"SYMBOL", "CONST", "STR", "BINOP", "UNOP",
+	"DEREF", "INDEX", "FIELD", "ADDROF",
 	"BLOCK", "EXPR", "CALL", "WHILE", "IF",
 	"RETURN", "BREAK", "CONTINUE", "IFELSE",
-	"PROGRAM", "TYPEDEF", "ENUMDEF", "FUNCDEF",
-	"GLOBAL", "FIELD",
+	"FUNC", "PROGRAM",
 };
 
 struct AstRec {
@@ -162,7 +160,6 @@ enum {
 	SYM_IS_DEFINED =   0x04,
 	SYM_IS_BUILTIN =   0x08,
 	SYM_IS_PLACED =    0x10, // exists at addr in sym->value
-	SYM_IS_REFERENCE = 0x20, // stored as pointer-to-type
 };
 
 struct SymbolRec {
@@ -322,7 +319,7 @@ Ast ast_make_const(u32 value, Type type) {
 	return ast_make(AST_CONST, value, nil, nil, type);
 }
 
-Ast ast_make_name(String name, Symbol sym) {
+Ast ast_make_symbol(String name, Symbol sym) {
 	return ast_make(AST_SYMBOL, 0, name, sym, sym->type);
 }
 
@@ -374,6 +371,10 @@ Type type_make(type_t kind, Type base, u32 len, u32 size) {
 	return t;
 }
 
+Type type_make_ptr(Type type) {
+	return type_make(TYPE_POINTER, type, 4, 0);
+}
+
 void type_add(Type type, String name) {
 	//fprintf(stderr,"type_add(%s, %s)\n",type_id_tab[type->kind],name->text);
 	Symbol sym = symbol_make(SYM_TYPE, 0, name, type, 0);
@@ -406,6 +407,9 @@ Type type_setup(const char* text, u32 tlen, u32 kind, u32 size) {
 }
 
 bool type_is_same(Type a, Type b) {
+	if (a == b) {
+		return true;
+	}
 	if (a->kind != b->kind) {
 		return false;
 	}
@@ -428,6 +432,24 @@ bool type_is_same(Type a, Type b) {
 		return false;
 	}
 	return true;
+}
+
+bool type_is_i32_shape(Type type) {
+	if ((type->kind == TYPE_I32) ||
+	    (type->kind == TYPE_BYTE) ||
+	    (type->kind == TYPE_BOOL)) {
+		return true;
+	} else {
+		return false;
+	}
+}
+
+bool type_is_compatible(Type dst, Type src) {
+	if (type_is_i32_shape(dst) && type_is_i32_shape(src)) {
+		return true;
+	}
+	return type_is_same(dst, src);
+	// check if deref of src is same as dst?
 }
 
 void type_dump(FILE* fp, Type type, bool use_short_name) {
@@ -1091,6 +1113,51 @@ i32 ast_get_const_i32(Ast node) {
 	return 0;
 }
 
+void ast_type_compat(Ast node, Type type) {
+	if (node->c0) {
+		if (!type_is_compatible(type, node->c0->type)) {
+			error("incompatible types");
+		}
+	}
+	if (node->c1) {
+		if (!type_is_compatible(type, node->c1->type)) {
+			error("incompatible types");
+		}
+	}
+	node->type = type;
+}
+
+Ast ast_make_deref(Ast child) {
+	Ast node = ast_make_simple(AST_DEREF, 0);
+	node->c0 = child;
+	node->type = child->type->base;
+	return node;
+}
+
+Ast ast_require_array_type(Ast node) {
+	if (node->type->kind == TYPE_ARRAY) {
+		return node;
+	}
+	if ((node->type->kind == TYPE_POINTER) &&
+	    (node->type->base->kind == TYPE_ARRAY)) {
+		return ast_make_deref(node);
+	}
+	error("expected an array");
+	return nil;
+}
+
+Ast ast_require_struct_type(Ast node) {
+	if (node->type->kind == TYPE_RECORD) {
+		return node;
+	}
+	if ((node->type->kind == TYPE_POINTER) &&
+	    (node->type->base->kind == TYPE_RECORD)) {
+	    	return ast_make_deref(node);
+	}
+	error("expected a struct");
+	return nil;
+}
+
 String parse_name(const char* what) {
 	if (ctx.tok != tIDN) {
 		error("expected %s, found %s %u", what, tnames[ctx.tok], ctx.tok);
@@ -1126,12 +1193,24 @@ Ast parse_operand() {
 		if (sym == nil) {
 			error("undefined identifier '%s'", ctx.ident->text);
 		}
-		node = ast_make_name(ctx.ident, sym);
+		node = ast_make_symbol(ctx.ident, sym);
 	} else {
 		error("invalid expression");
 	}
 	next();
 	return node;
+}
+
+Symbol type_find_field(Type type, String name) {
+	Symbol field = type->first;
+	while (field != nil) {
+		if (field->name == name) {
+			return field;
+		}
+		field = field->next;
+	}
+	error("struct has no such field '%s'", name->text);
+	return nil;
 }
 
 Ast parse_primary_expr() {
@@ -1140,9 +1219,11 @@ Ast parse_primary_expr() {
 		if (ctx.tok == tOPAREN) {
 			next();
 			//VALIDATE as func or ptr-to-func
-			if ((node->kind != AST_SYMBOL) ||
-			    (node->sym->kind != SYM_FUNC)) {
-				error("cannot call non-function");
+			if (node->kind != AST_SYMBOL) {
+				error("cannot call '%s'", ast_kind[node->kind]);
+			}
+			if (node->sym->kind != SYM_FUNC) {
+				error("cannot call non-function '%s'", node->sym->name->text);
 			}
 			u32 n = 0;
 
@@ -1152,6 +1233,7 @@ Ast parse_primary_expr() {
 			Ast last = call;
 
 			while (ctx.tok != tCPAREN) {
+				// VALIDATE compatibility
 				Ast param = parse_expr();
 				last->c2 = param;
 				last = param;
@@ -1165,18 +1247,23 @@ Ast parse_primary_expr() {
 			node = call;
 		} else if (ctx.tok == tDOT) {
 			next();
+			node = ast_require_struct_type(node);
 			String name = parse_name("field name");
-			// VALIDATE appropriate name for type
-			// VALIDATE type is ptr or struct
-			Ast dot = ast_make_simple(AST_DEREF, 0);
+			Ast dot = ast_make_simple(AST_FIELD, 0);
 			dot->c0 = node;
-			dot->name = name;
+			dot->c1 = ast_make_simple(AST_SYMBOL, 0);
+			dot->c1->name = name;
+			dot->c1->sym = type_find_field(node->type, name);
+			dot->c1->type = dot->c1->sym->type;
+			dot->type = dot->c1->type;
 			node = dot;
 		} else if (ctx.tok == tOBRACK) {
 			next();
+			node = ast_require_array_type(node);
 			Ast index = ast_make_simple(AST_INDEX, 0);
 			index->c0 = node;
 			index->c1 = parse_expr();
+			index->type = node->type->base;
 			node = index;
 			require(tCBRACK);
 			//VALIDATE lhs is array, rhs is appropriate numeric
@@ -1192,10 +1279,20 @@ Ast parse_unary_expr() {
 	if (op == tPLUS) {
 		next();
 		return parse_unary_expr();
-	} else if ((op == tMINUS) || (op == tBANG) || (op == tNOT) || (op== tAMP)) {
+	} else if ((op == tMINUS) || (op == tBANG) || (op == tNOT) || (op == tAMP)) {
 		u32 op = ctx.tok;
 		next();
-		return ast_make_unop(op, parse_unary_expr());
+		Ast node = ast_make_unop(op, parse_unary_expr());
+		if (op == tAMP) {
+			node->type = type_make_ptr(node->c0->type);
+			node->kind = AST_ADDROF;
+			node->ival = 0;
+		} else if (op == tBANG) {
+			ast_type_compat(node, ctx.type_bool);
+		} else {
+			ast_type_compat(node, ctx.type_i32);
+		}
+		return node;
 	} else {
 		return parse_primary_expr();
 	}
@@ -1207,6 +1304,7 @@ Ast parse_mul_expr() {
 		u32 op = ctx.tok;
 		next();
 		node = ast_make_binop(op, node, parse_unary_expr());
+		ast_type_compat(node, ctx.type_i32);
 	}
 	return node;
 }
@@ -1217,6 +1315,7 @@ Ast parse_add_expr() {
 		u32 op = ctx.tok;
 		next();
 		node = ast_make_binop(op, node, parse_mul_expr());
+		ast_type_compat(node, ctx.type_i32);
 	}
 	return node;
 }
@@ -1227,6 +1326,7 @@ Ast parse_rel_expr() {
 		u32 op = ctx.tok;
 		next();
 		node = ast_make_binop(op, node, parse_add_expr());
+		ast_type_compat(node, ctx.type_bool);
 	}
 	return node;
 }
@@ -1238,6 +1338,7 @@ Ast parse_and_expr() {
 		while (ctx.tok == tAND) {
 			next();
 			node = ast_make_binop(tAND, node, parse_rel_expr());
+			ast_type_compat(node, ctx.type_bool);
 		}
 	}
 	return node;
@@ -1249,6 +1350,7 @@ Ast parse_expr() {
 		while (ctx.tok == tOR) {
 			next();
 			node = ast_make_binop(tOR, node, parse_and_expr());
+			ast_type_compat(node, ctx.type_bool);
 		}
 	}
 	return node;
@@ -1516,14 +1618,15 @@ Ast parse_local_var() {
 	if (ctx.tok == tASSIGN) {
 		next();
 		node = ast_make_simple(AST_EXPR, 0);
-		node->c0 = ast_make_binop(tASSIGN, ast_make_name(name, sym), parse_expr());
+		node->c0 = ast_make_binop(tASSIGN, ast_make_symbol(name, sym), parse_expr());
+		node->c0->type = node->c0->c1->type;
 	}
 	require(tSEMI);
 
 	return node;
 }
 
-Ast parse_global_var() {
+void parse_global_var() {
 	String name = parse_name("variable name");
 	// TODO: allow type inference
 	Type type = parse_type(false);
@@ -1534,8 +1637,6 @@ Ast parse_global_var() {
 	// advance global pointer and round to next workd
 	ctx.gp = ctx.gp + type->size;
 	ctx.gp = (ctx.gp + 3) & (~3);
-
-	Ast node = ast_make_simple(AST_GLOBAL, 0);
 
 	if (ctx.tok == tASSIGN) {
 		next();
@@ -1552,16 +1653,12 @@ Ast parse_global_var() {
 		} else {
 			Ast expr = parse_expr();
 			i32 v = ast_get_const_i32(expr);
-			node->c0 = expr;
+			// DISCARD expr
 			// VALIDATE compatible integer type
 			ctx.data[sym->value >> 2] = v;
 		}
 	}
 	require(tSEMI);
-	node->name = name;
-	node->type = type;
-	node->sym = sym;
-	return node;
 }
 
 Ast parse_expr_statement() {
@@ -1574,16 +1671,19 @@ Ast parse_expr_statement() {
 		next();
 		right = parse_expr();
 		node = ast_make_binop(tASSIGN, left, right);
+		node->type = node->c1->type;
 	} else if ((ctx.tok & tcMASK) == tcAEQOP) {
 		u32 op = ctx.tok; // - tADDEQ;
 		next();
 		right = parse_expr();
 		node = ast_make_binop(op, left, right);
+		// TODO: type prop, convert x op= y  to x = x op y
 	} else if ((ctx.tok & tcMASK) == tcMEQOP) {
 		u32 op = ctx.tok; // - tMULEQ;
 		next();
 		right = parse_expr();
 		node = ast_make_binop(op, left, right);
+		// TODO: type prop, convert x op= y  to x = x op y
 	} else if ((ctx.tok == tINC) || (ctx.tok == tDEC)) {
 		u32 op;
 		if (ctx.tok == tINC) {
@@ -1594,7 +1694,10 @@ Ast parse_expr_statement() {
 		next();
 		right = ast_make_const(1, ctx.type_i32);
 		right = ast_make_binop(op, left, right);
+		right->type = ctx.type_i32;
 		node = ast_make_binop(tASSIGN, left, right);
+		node->type = ctx.type_i32;
+		// TODO: check type?
 	} else {
 		node = left;
 	}
@@ -1670,12 +1773,13 @@ Ast parse_function_body(Symbol fn) {
 Symbol parse_param(String fname, u32 n, Symbol first, Symbol last) {
 	String pname = parse_name("parameter name");
 	Type ptype = parse_type(false);
-	Symbol param = symbol_make(SYM_PARAM, 0, pname, ptype, /* 4 + */ n * 4);
 
 	// arrays and structs are always passed as reference parameters
 	if ((ptype->kind == TYPE_ARRAY) || (ptype->kind == TYPE_RECORD)) {
-		param->flags |= SYM_IS_REFERENCE;
+		ptype = type_make_ptr(ptype);
 	}
+
+	Symbol param = symbol_make(SYM_PARAM, 0, pname, ptype, /* 4 + */ n * 4);
 
 	Symbol sym = first;
 	while (sym != nil) {
@@ -1782,7 +1886,7 @@ Ast parse_function() {
 	return nil;
 }
 
-Ast parse_type_def() {
+void parse_type_def() {
 	String name = parse_name("type name");
 	Type type = parse_type(false);
 	Type prev = type_find(name);
@@ -1802,16 +1906,9 @@ Ast parse_type_def() {
 		type = prev;
 	}
 	require(tSEMI);
-	Ast node = ast_make_simple(AST_TYPEDEF, 0);
-	node->name = name;
-	node->type = type;
-	return node;
 }
 
-Ast parse_enum_def() {
-	Ast decl = ast_make_simple(AST_ENUMDEF, 0);
-	Ast last = decl;
-
+void parse_enum_def() {
 	require(tOBRACE);
 	u32 val = 0;
 	while (ctx.tok != tCBRACE) {
@@ -1824,46 +1921,41 @@ Ast parse_enum_def() {
 			next();
 			Ast expr = parse_expr();
 			val = ast_get_const_i32(expr);
-			//XXX ensure const and set val
+			// typecheck? discard subtree
 		}
 		require(tCOMMA);
-		Ast node = ast_make(AST_FIELD, val, name, sym, ctx.type_i32);
-		last->c2 = node;
-		last = node;
 		symbol_add_global(symbol_make(SYM_CONST, 0, name, ctx.type_i32, val));
 		val++;
 	}
 	require(tCBRACE);
 	require(tSEMI);
-	return decl;
 }
 
 Ast parse_program() {
 	Ast program = ast_make_simple(AST_PROGRAM, 0);
 	Ast last = program;
-	Ast node = nil;
 	next();
 	for (;;) {
 		if (ctx.tok == tENUM) {
 			next();
-			node = parse_enum_def();
+			parse_enum_def();
 		} else if (ctx.tok == tTYPE) {
 			next();
-			node = parse_type_def();
+			parse_type_def();
 		} else if (ctx.tok == tFUNC) {
 			next();
-			node = parse_function();
+			Ast node = parse_function();
+			if (node != nil) {
+				last->c2 = node;
+				last = node;
+			}
 		} else if (ctx.tok == tVAR) {
 			next();
-			node = parse_global_var();
+			parse_global_var();
 		} else if (ctx.tok == tEOF) {
 			return program;
 		} else {
 			expected("function, variable, or type definition");
-		}
-		if (node != nil) {
-			last->c2 = node;
-			last = node;
 		}
 	}
 }
@@ -1944,10 +2036,6 @@ int _ast_dump(FILE* fp, Ast node, u32 indent, bool dumplist, Ast mark) {
 		if (node->type != nil) {
 			type_dump_compact(fp, node->type);
 		}
-		fprintf(fp, "\n");
-	} else if (node->kind == AST_TYPEDEF) {
-		fprintf(fp, "'%s' ", node->name->text);
-		type_dump_compact(fp, node->type);
 		fprintf(fp, "\n");
 	} else {
 		if (node->name) {
