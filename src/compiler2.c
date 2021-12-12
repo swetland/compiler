@@ -14,8 +14,6 @@
 #include <unistd.h>
 #include <sys/stat.h>
 
-#include "risc5.h"
-
 // builtin types
 #define nil 0
 typedef uint32_t u32;
@@ -2170,7 +2168,11 @@ void ast_dump_graphs(Ast node) {
 	}
 }
 
+#if IR
+#include "codegen-ir.c"
+#else
 #include "codegen-risc5-simple.c"
+#endif
 
 #if 0
 void type_dump_all() {
@@ -2187,80 +2189,6 @@ void type_dump_all() {
 	}
 }
 #endif
-
-// ================================================================
-
-void binary_write(const char* outname) {
-	int fd = open(outname, O_CREAT | O_TRUNC | O_WRONLY, 0644);
-	if (fd < 0) {
-		error("cannot open '%s' to write", outname);
-	}
-	u32 n = 0;
-	while (n < ctx.pc) {
-		if (write(fd, ctx.code + (n/4), sizeof(u32)) != sizeof(u32)) {
-			error("error writing '%s'", outname);
-		}
-		n += 4;
-	}
-	n = 0;
-	while (n < ctx.gp) {
-		if (write(fd, ctx.data + (n/4), sizeof(u32)) != sizeof(u32)) {
-			error("error writing '%s'", outname);
-		}
-		n += 4;
-	}
-	close(fd);
-}
-
-void listing_write(const char* listfn, const char* srcfn) {
-	FILE* fin = fopen(srcfn, "r");
-	if (fin == NULL) {
-		error("cannot re-read '%s'\n", srcfn);
-	}
-	FILE* fout = fopen(listfn, "w");
-	if (fout == NULL) {
-		error("cannot write '%s'\n", listfn);
-	}
-	u32 n = 0;
-	u32 line = 1;
-	char buf[1024];
-	while (n < ctx.pc) {
-		u32 ins = ctx.code[n/4];
-#if 1
-		if ((line < ctx.xref[n/4]) && fin) {
-			fprintf(fout, "\n");
-			while (line < ctx.xref[n/4]) {
-				if (fgets(buf, sizeof(buf), fin) == nil) {
-					fin = nil;
-					break;
-				}
-				u32 i = 0;
-				while (buf[i] != 0) {
-					if (buf[i] > ' ') {
-						fprintf(fout,"%s", buf);
-						break;
-					}
-					i++;
-				}
-				line++;
-			}
-			fprintf(fout, "\n");
-		}
-#endif
-		risc5dis(n, ins, buf);
-		fprintf(fout, "%08x: %08x  %s\n", n, ins, buf);
-		n += 4;
-	}
-	n = 0;
-	while (n < ctx.gp) {
-		fprintf(fout, "%08x: %08x\n", ctx.pc + n, ctx.data[n >> 2]);
-		n += 4;
-	}
-	fclose(fout);
-	if (fin) {
-		fclose(fin);
-	}
-}
 
 // ================================================================
 
@@ -2368,7 +2296,7 @@ i32 main(int argc, args argv) {
 		ast_dump_graphs(a);
 	}
 
-	gen_risc5_simple(a);
+	gen_program(a);
 
 	binary_write(outname);
 

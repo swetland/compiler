@@ -1,5 +1,5 @@
 
-all: bin/compiler bin/compiler2 bin/fs bin/r5d bin/r5e bin/mkinstab 
+all: bin/cold bin/cast bin/fs bin/r5d bin/r5e bin/mkinstab 
 	
 runtests: out/test/summary.txt
 
@@ -20,13 +20,17 @@ CFLAGS += -Wno-unused-but-set-variable -Wno-unused-variable
 
 CC := gcc
 
-bin/compiler: src/compiler.c src/risc5dis.c out/risc5ins.h
+bin/cold: src/compiler.c src/risc5dis.c out/risc5ins.h
 	@mkdir -p bin
 	$(CC) -o $@ $(CFLAGS) -Wno-unused-result -DC src/compiler.c src/risc5dis.c
 
-bin/compiler2: src/compiler2.c src/codegen-risc5-simple.c src/risc5dis.c out/risc5ins.h
+bin/cast: src/compiler2.c src/codegen-risc5-simple.c src/risc5dis.c out/risc5ins.h
 	@mkdir -p bin
 	$(CC) -o $@ $(CFLAGS) -Wno-unused-result -DC src/compiler2.c src/risc5dis.c
+
+bin/cir: src/compiler2.c src/codegen-ir.c src/risc5dis.c out/risc5ins.h
+	@mkdir -p bin
+	$(CC) -o $@ $(CFLAGS) -Wno-unused-result -DIR -DC src/compiler2.c src/risc5dis.c
 
 bin/rewriter: src/rewriter.c
 	@mkdir -p bin
@@ -64,22 +68,22 @@ out/risc5ins.h: src/risc5ins.txt bin/mkinstab
 # fail to be compiled by the rule that depends on src+log *or*
 # we fail to depend on the .log for tests with both...
 
-out/test/%.txt: test/%.src test/%.log bin/compiler bin/r5e test/runtest.sh
+out/test/%.txt: test/%.src test/%.log bin/cold bin/r5e test/runtest.sh
 	@mkdir -p out/test
 	@rm -f $@
 	@test/runtest.sh $< $@
 
-out/test/%.txt: test/%.src bin/compiler bin/r5e test/runtest.sh
+out/test/%.txt: test/%.src bin/cold bin/r5e test/runtest.sh
 	@mkdir -p out/test
 	@rm -f $@
 	@test/runtest.sh $< $@
 
-out/test2/%.txt: test/%.src test/%.log bin/compiler2 bin/r5e test/runtest2.sh
+out/test2/%.txt: test/%.src test/%.log bin/cast bin/r5e test/runtest2.sh
 	@mkdir -p out/test2
 	@rm -f $@
 	@test/runtest2.sh $< $@
 
-out/test2/%.txt: test/%.src bin/compiler2 bin/r5e test/runtest2.sh
+out/test2/%.txt: test/%.src bin/cast bin/r5e test/runtest2.sh
 	@mkdir -p out/test2
 	@rm -f $@
 	@test/runtest2.sh $< $@

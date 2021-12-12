@@ -13,8 +13,8 @@ msg="${txt%.txt}.msg"
 gold="${src%.src}.log"
 
 #echo "RUNTEST2: $src: compiling..."
-#echo bin/compiler2 -o "$bin" -l "$lst" "$src" "$msg"
-if bin/compiler2 -o "$bin" -a "$ast" -l "$lst" "$src" 2> "$msg"; then
+#echo bin/cast -o "$bin" -l "$lst" "$src" "$msg"
+if bin/cast -o "$bin" -a "$ast" -l "$lst" "$src" 2> "$msg"; then
 	# success!
 	if [[ "$txt" == *"-err"* ]]; then
 		# but this was an error test, so...
