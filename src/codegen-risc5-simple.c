@@ -417,7 +417,6 @@ u32 gen_branch_if_expr_false(Ast node) {
 		u32 cc = rel_op_to_inv_cc_tab[node->kind - AST_EQ];
 		u32 left = gen_expr(node->c0);
 		u32 right = gen_expr(node->c1);
-		u32 res = get_reg_tmp();
 		emit_op(SUB, left, left, right);
 		put_reg(left);
 		put_reg(right);
