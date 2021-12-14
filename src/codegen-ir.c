@@ -163,6 +163,7 @@ void inst_ret(i32 a) {
 }
 
 u32 rel_op_to_ins_tab[6] = { INS_BEQ, INS_BNE, INS_BLT, INS_BLE, INS_BGT, INS_BGE };
+u32 rel_op_to_inv_ins_tab[6] = { INS_BNE, INS_BEQ, INS_BGE, INS_BGT, INS_BLE, INS_BLT };
 u32 add_op_to_ins_tab[4] = { INS_ADD, INS_SUB, INS_OR, INS_XOR };
 u32 mul_op_to_ins_tab[6] = { INS_MUL, INS_SDIV, INS_SREM, INS_AND, INS_LSL, INS_ASR };
 
@@ -313,6 +314,19 @@ i32 gen_relop(Ast node, u32 op) {
 	return inst_phi(rtrue, rfalse);
 }
 
+i32 gen_branch_if_expr_false(Ast node, i32 label) {
+	if (ast_kind_is_relop(node->kind)) {
+		u32 op = rel_op_to_inv_ins_tab[node->kind - AST_EQ];
+		i32 left = gen_expr(node->c0);
+		i32 right = gen_expr(node->c1);
+		return inst_br_cmp(op, label, left, right);
+	} else {
+		i32 r = gen_expr(node);
+		return inst_br_cmpi(INS_BEQ, label, r, 0);
+	}
+}
+
+
 i32 gen_short_circuit_op(Ast node, u32 cc, u32 sc) {
 #if 0
 	u32 r = gen_expr(node->c0);
@@ -432,14 +446,13 @@ void gen_while(Ast node) {
 
 	inst_label(loop_continue);
 
-	u32 r = gen_expr(node->c0);
-
-	// branch to exit if false
-	inst_br_cmpi(INS_BEQ, loop_exit, r, 0);
+	gen_branch_if_expr_false(node->c0, loop_exit);
 
 	gen_block(node->c1);
 
 	inst_br(loop_continue);
+
+	inst_label(loop_exit);
 
 	// restore branch targets
 	loop_continue = old_loop_continue;
@@ -457,9 +470,7 @@ void gen_if_else(Ast node) {
 
 	// compute if expr
 	// branch ahead if false;
-	i32 r = gen_expr(node->c0);
-
-	i32 l0_br_false = inst_br_cmpi(INS_BEQ, label_get(), r, 0);
+	i32 l0_br_false = gen_branch_if_expr_false(node->c0, label_get());
 
 	i32 l_exit = label_get();
 
@@ -476,9 +487,7 @@ void gen_if_else(Ast node) {
 
 		if (node->kind == AST_IFELSE) { // ifelse ...
 			gen_trace("gen_ifelse()");
-			r = gen_expr(node->c0);
-
-			i32 l0_br_false = inst_br_cmpi(INS_BEQ, label_get(), r, 0);
+			i32 l0_br_false = gen_branch_if_expr_false(node->c0, label_get());
 
 			gen_block(node->c1);
 			node = node->c2;

@@ -150,6 +150,7 @@ void emit_bi(u32 op, u32 off) {
 }
 
 u8 rel_op_to_cc_tab[6] = { EQ, NE, LT, LE, GT, GE };
+u8 rel_op_to_inv_cc_tab[6] = { NE, EQ, GE, GT, LE, LT };
 u32 add_op_to_ins_tab[4] = { ADD, SUB, IOR, XOR };
 u32 mul_op_to_ins_tab[6] = { MUL, DIV, MOD, AND, LSL, ASR };
 
@@ -411,6 +412,28 @@ u32 gen_relop(Ast node, u32 cc) {
 	return res;
 }
 
+u32 gen_branch_if_expr_false(Ast node) {
+	if (ast_kind_is_relop(node->kind)) {
+		u32 cc = rel_op_to_inv_cc_tab[node->kind - AST_EQ];
+		u32 left = gen_expr(node->c0);
+		u32 right = gen_expr(node->c1);
+		u32 res = get_reg_tmp();
+		emit_op(SUB, left, left, right);
+		put_reg(left);
+		put_reg(right);
+		u32 addr = ctx.pc;
+		emit_bi(cc, 0);
+		return addr;
+	} else {
+		i32 r = gen_expr(node);
+		emit_mov(R11, r); // set z flag
+		put_reg(r);
+		u32 addr = ctx.pc;
+		emit_bi(EQ, 0);
+		return addr;
+	}
+}
+
 u32 gen_short_circuit_op(Ast node, u32 cc, u32 sc) {
 	u32 r = gen_expr(node->c0);
 	emit_mov(R11, r); // set z flag
@@ -535,17 +558,15 @@ void gen_while(Ast node) {
 	loop_exit = &list;
 
 	loop_continue = ctx.pc;
-	u32 r = gen_expr(node->c0);
 
-	emit_mov(R11, r); // set z flag
-	put_reg(r);
-	gen_branch_fwd(EQ, &list);
+	u32 br_false = gen_branch_if_expr_false(node->c0);
 
 	gen_block(node->c1);
 
 	gen_branch(AL, loop_continue);
 
-	// patch breaks
+	// patch branches
+	fixup_branch_fwd(br_false);
 	fixup_branches_fwd(loop_exit->next);
 
 	// restore branch targets
@@ -564,11 +585,7 @@ void gen_if_else(Ast node) {
 
 	// compute if expr
 	// branch ahead if false;
-	u32 r = gen_expr(node->c0);
-	emit_mov(R11, r); // set z flag;
-	put_reg(r);
-	u32 l0_br_false = ctx.pc;
-	emit_bi(EQ, 0);
+	u32 l0_br_false = gen_branch_if_expr_false(node->c0);
 
 	// exec then block
 	gen_block(node->c1);
@@ -583,11 +600,7 @@ void gen_if_else(Ast node) {
 
 		if (node->kind == AST_IFELSE) { // ifelse ...
 			gen_trace("gen_ifelse()");
-			r = gen_expr(node->c0);
-			emit_mov(R11, r); // set z flag
-			put_reg(r);
-			l0_br_false = ctx.pc;
-			emit_bi(EQ, 0);
+			u32 l0_br_false = gen_branch_if_expr_false(node->c0);
 			gen_block(node->c1);
 			node = node->c2;
 		} else { // else ...
