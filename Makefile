@@ -1,5 +1,5 @@
 
-all: bin/cold bin/cast bin/fs bin/r5d bin/r5e bin/mkinstab 
+all: bin/cold bin/cast bin/cir bin/fs bin/r5d bin/r5e bin/mkinstab 
 	
 runtests: out/test/summary.txt
 
