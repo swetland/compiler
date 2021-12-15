@@ -57,7 +57,6 @@ i32 label_get_global(str name) {
 // virtual registers start at 0...
 Inst ins_last = nil;
 i32 reg_next = REG_VIRT_0;
-i32 label_next = 0;
 
 i32 reg_get() {
 	i32 r = reg_next;
@@ -65,22 +64,67 @@ i32 reg_get() {
 	return r;
 }
 
-i32 label_get() {
-	i32 n = label_next;
-	label_next = n + 1;
-	return n;
-}
+// table of labels
+i32 label_next = 0;
+Inst label_idx[1024];
 
-i32 inst_make(u32 op, i32 a, i32 b, i32 c) {
+Inst _inst_make(u32 op, i32 a, i32 b, i32 c) {
 	Inst ins = malloc(sizeof(InstRec));
 	ins->next = nil;
 	ins->op = op;
 	ins->a = a;
 	ins->b = b;
 	ins->c = c;
+	return ins;
+}
+
+// obtain a (detached) label instruction
+// branches may target it before it is placed
+// with inst_label()
+i32 label_get() {
+	i32 a = label_next;
+	Inst ins = _inst_make(INS_LABEL, a, 0, 0);
+	label_idx[a] = ins;
+	label_next = a + 1;
+	return a;
+}
+
+// allocate an instruction and add it to the graph
+i32 inst_make(u32 op, i32 a, i32 b, i32 c) {
+	Inst ins = _inst_make(op, a, b, c);
 	ins_last->next = ins;
 	ins_last = ins;
 	return a;
+}
+
+// place a label obtained with label_get()
+i32 inst_label(i32 a) {
+	if ((a < 0) || (a >= label_next)) {
+		error("invalid label #%d\n", a);
+	}
+	Inst ins = label_idx[a];
+	if (ins->b != 0) {
+		error("label #%d placed twice!", a);
+	}
+	// mark as placed
+	ins->b = 1;
+	// add to graph
+	ins_last->next = ins;
+	ins_last = ins;
+	return a;
+}
+
+// branch instructions use this to validate targets
+void inst_use_label(i32 a) {
+	if ((a < 0) || (a >= label_next)) {
+		error("invalid label #%d\n", a);
+	}
+	// bump edge count
+	label_idx[a]->c ++;
+}
+
+i32 inst_label_global(str name) {
+	return inst_make(INS_LABEL, label_get_global(name), 1, 0);
 }
 
 i32 inst_alu(u32 op, i32 b, i32 c) {
@@ -134,28 +178,28 @@ void inst_stbi(i32 a, i32 b, i32 imm) {
 void inst_stwi(i32 a, i32 b, i32 imm) {
 	inst_make(INS_ST | INF_SZ_U32 | INF_C_IMM, a, b, imm);
 }
-i32 inst_label(i32 a) {
-	return inst_make(INS_LABEL, a, 0, 0);
-}
-i32 inst_label_global(str name) {
-	return inst_label(label_get_global(name));
-}
 i32 inst_br(i32 label) {
+	inst_use_label(label);
 	return inst_make(INS_B, label, 0, 0);
 }
 i32 inst_br_cmp(u32 op, i32 label, i32 b, i32 c) {
+	inst_use_label(label);
 	if ((op < INS_BEQ) || (op > INS_BGE)) {
 		error("inst_branch_cond inavlid branch op");
 	}
 	return inst_make(op, label, b, c);
 }
 i32 inst_br_cmpi(u32 op, i32 label, i32 b, i32 imm) {
+	inst_use_label(label);
 	if ((op < INS_BEQ) || (op > INS_BGE)) {
 		error("inst_branch_condi inavlid branch op");
 	}
 	return inst_make(op | INF_C_IMM, label, b, imm);
 }
 void inst_call(i32 label) {
+	if (label >= 0) {
+		error("cannot CALL local label #%d\n", label);
+	}
 	inst_make(INS_CALL, label, 0, 0);
 }
 void inst_ret(i32 a) {
@@ -659,7 +703,7 @@ void prarg(FILE* fp, i32 n, i32 op) {
 
 void prlabel(FILE* fp, i32 n) {
 	if (n >= 0) {
-		fprintf(fp, "L%u", n);
+		fprintf(fp, "L%u", label_idx[n]->a);
 	} else {
 		fprintf(fp, "@%s", global_names[-n]);
 	}
@@ -670,7 +714,7 @@ void inst_disasm(FILE* fp, Inst ins) {
 	//fprintf(fp, "(%08x %08x %08x %08x)\n", ins->op, ins->a, ins->b, ins->c);
 	if (op == INS_LABEL) {
 		prlabel(fp, ins->a);
-		fprintf(fp, ":");
+		fprintf(fp, ": // count=%u", ins->c);
 	} else if (op == INS_MOV) {
 		fprintf(fp, "\tmov ");
 		prreg(fp, ins->a);
