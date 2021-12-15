@@ -55,7 +55,7 @@ i32 label_get_global(str name) {
 
 // local labels start at 0..
 // virtual registers start at 0...
-Inst ins_last = nil;
+Inst ins_last_placed = nil;
 i32 reg_next = REG_VIRT_0;
 
 i32 reg_get() {
@@ -92,8 +92,8 @@ i32 label_get() {
 // allocate an instruction and add it to the graph
 i32 inst_make(u32 op, i32 a, i32 b, i32 c) {
 	Inst ins = _inst_make(op, a, b, c);
-	ins_last->next = ins;
-	ins_last = ins;
+	ins_last_placed->next = ins;
+	ins_last_placed = ins;
 	return a;
 }
 
@@ -109,8 +109,8 @@ i32 inst_label(i32 a) {
 	// mark as placed
 	ins->b = 1;
 	// add to graph
-	ins_last->next = ins;
-	ins_last = ins;
+	ins_last_placed->next = ins;
+	ins_last_placed = ins;
 	return a;
 }
 
@@ -620,12 +620,12 @@ Inst gen_func(Ast node) {
 	InstRec head;
 
 	// setup initial state
-	ins_last = &head;
+	ins_last_placed = &head;
 	reg_next = REG_VIRT_0;
 	label_next = 0;
 
 	inst_label_global(node->sym->name->text);
-	Inst first = ins_last;
+	Inst first = ins_last_placed;
 
 	// local space plus saved lr and fp
 	u32 x = node->sym->type->size + 8;
@@ -654,10 +654,122 @@ Inst gen_func(Ast node) {
 	inst_aluix(INS_ADD, REG_SP, REG_SP, x);
 	inst_ret(REG_LR);
 
+	inst_label(label_get());
+
 	return head.next;
 }
 
 void inst_disasm(FILE* fp, Inst ins);
+
+bool inst_is_label(Inst ins) {
+	return (ins->op & INS_OP_MASK) == INS_LABEL;
+}
+bool inst_is_uncond_branch(Inst ins) {
+	return (ins->op & INS_OP_MASK) == INS_B;
+}
+bool inst_is_cond_branch(Inst ins) {
+	u32 oc = ins->op & INS_OP_MASK;
+	return (oc >= INS_BEQ) && (oc <= INS_BGE);
+}
+
+
+// dispose of an instruction (must have been removed from graph)
+void opt_inst_destroy(Inst ins) {
+	u32 op = ins->op & INS_OP_MASK;
+	if ((op >= INS_B) && (op <= INS_BGE)) {
+		Inst tgt = label_idx[ins->a];
+		// decrement inbound count on branch target
+		tgt->c --;
+	}
+	ins->op = INS_DEAD;
+	ins->next = nil;
+	free(ins);
+}
+
+// clean up messes leftover from code generation
+// - remove unconditional branches to the next instruction
+// - remove labels with no inbounds
+// - merge adjacent labels
+// - insert labels after flow control departures from straightline
+//   if such a label does not already exist
+// - remove code between unconditional branches and labels
+void opt_func_label_cleanup(Inst first, Inst last) {
+	Inst prev = first;
+	Inst ins = first->next;
+	while (ins != last) {
+		if (inst_is_uncond_branch(ins) && !inst_is_label(ins->next)) {
+			// any code between an uncond branch and a label is dead
+			Inst dead = ins->next;
+			ins->next = dead->next;
+			opt_inst_destroy(dead);
+			continue;
+		}
+		if (inst_is_uncond_branch(ins)) {
+			// do we target a label between us and the next inst?
+			Inst x = ins->next;
+			Inst dead = nil;
+			// in case we've replaced its target, obtain the label
+			// id of the target via the label index table
+			i32 id = label_idx[ins->a]->a;
+			while (inst_is_label(x) && (x != last)) {
+				if (x->a == id) {
+					// we're uncond jumping to an immediately
+					// following label.
+					dead = ins;
+					break;
+				}
+				x = x->next;
+			}
+			if (dead != nil) {
+				prev->next = dead->next;
+				ins = dead->next;
+				opt_inst_destroy(dead);
+				continue;
+			}
+		}
+		if (inst_is_label(ins)) {
+			if ((ins->c == 0) && !(inst_is_cond_branch(prev))) {
+				// nobody jumps here
+				// mark label as unused? remove from idx?
+				prev->next = ins->next;
+				ins = ins->next;
+				continue;
+			}
+			if (inst_is_label(prev)) {
+				// if prev was also a label, merge with it...
+				// 1. acquire its refcount
+				prev->c += ins->c;
+				// 2. acquire its slot (redirect all inbounds to us)
+				label_idx[prev->a] = ins;
+				// 3. remove from instruction stream (delete?)
+				prev->next = ins->next;
+				ins = ins->next;
+				continue;
+			}
+		}
+		if (inst_is_cond_branch(ins) && !inst_is_label(ins->next)) {
+			// flow control point not followed by a label
+			Inst next = ins->next;
+			ins_last_placed = ins;
+			inst_label(label_get());
+			ins_last_placed->next = next;
+		}
+		ins = ins->next;
+		prev = prev->next;
+	}
+}
+
+void opt_func(Ast node, Inst first, Inst last) {
+	opt_func_label_cleanup(first, last);
+}
+
+void dis_func(FILE* fp, Inst ins) {
+	fprintf(stderr,"\n------------------\n");
+	while (ins != nil) {
+		inst_disasm(stderr, ins);
+		ins = ins->next;
+	}
+}
 
 void gen_program(Ast node) {
 	gen_trace( "gen_risc5_simple()\n");
@@ -668,11 +780,9 @@ void gen_program(Ast node) {
 	while (node != nil) {
 		if (node->kind == AST_FUNC) {
 			Inst ins = gen_func(node);
-			fprintf(stderr,"\n------------------\n");
-			while (ins != nil) {
-				inst_disasm(stderr, ins);
-				ins = ins->next;
-			}
+			dis_func(stderr, ins);
+			opt_func(node, ins->next, ins_last_placed);
+			dis_func(stderr, ins);
 		}
 		node = node->c2;
 	}

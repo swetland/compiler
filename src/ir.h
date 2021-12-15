@@ -47,6 +47,8 @@ enum {
 	INS_CALL,  // CALL Global
 	INS_RET,
 
+	INS_DEAD,
+
 	INS_COUNT, // total unique instructions
 
 	INS_OP_MASK = 0x7F,
@@ -57,6 +59,7 @@ str ins_name[INS_COUNT] = {
 	"lsl", "lsr", "asr", "and", "or", "xor",
 	"phi", "mov", "ld", "st", "label",
 	"b", "beq", "bne", "blt", "ble", "bgt", "bge", "call", "ret",
+	"dead",
 };
 str isz_name[4] = {
 	"b", "h", "w", "d"
