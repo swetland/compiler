@@ -412,6 +412,7 @@ u32 gen_relop(Ast node, u32 cc) {
 	return res;
 }
 
+// returns address of branch to patch
 u32 gen_branch_if_expr_false(Ast node) {
 	if (ast_kind_is_relop(node->kind)) {
 		u32 cc = rel_op_to_inv_cc_tab[node->kind - AST_EQ];
@@ -599,7 +600,7 @@ void gen_if_else(Ast node) {
 
 		if (node->kind == AST_IFELSE) { // ifelse ...
 			gen_trace("gen_ifelse()");
-			u32 l0_br_false = gen_branch_if_expr_false(node->c0);
+			l0_br_false = gen_branch_if_expr_false(node->c0);
 			gen_block(node->c1);
 			node = node->c2;
 		} else { // else ...

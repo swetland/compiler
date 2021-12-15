@@ -487,7 +487,7 @@ void gen_if_else(Ast node) {
 
 		if (node->kind == AST_IFELSE) { // ifelse ...
 			gen_trace("gen_ifelse()");
-			i32 l0_br_false = gen_branch_if_expr_false(node->c0, label_get());
+			l0_br_false = gen_branch_if_expr_false(node->c0, label_get());
 
 			gen_block(node->c1);
 			node = node->c2;
