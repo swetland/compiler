@@ -70,6 +70,7 @@ typedef struct InstRec* Inst;
 
 struct InstRec {
 	Inst next;
+	Inst prev;
 	i32 op;
 	i32 a;
 	i32 b;

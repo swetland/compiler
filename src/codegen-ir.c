@@ -71,6 +71,7 @@ Inst label_idx[1024];
 Inst _inst_make(u32 op, i32 a, i32 b, i32 c) {
 	Inst ins = malloc(sizeof(InstRec));
 	ins->next = nil;
+	ins->prev = nil;
 	ins->op = op;
 	ins->a = a;
 	ins->b = b;
@@ -92,6 +93,7 @@ i32 label_get() {
 // allocate an instruction and add it to the graph
 i32 inst_make(u32 op, i32 a, i32 b, i32 c) {
 	Inst ins = _inst_make(op, a, b, c);
+	ins->prev = ins_last_placed;
 	ins_last_placed->next = ins;
 	ins_last_placed = ins;
 	return a;
@@ -109,6 +111,7 @@ i32 inst_label(i32 a) {
 	// mark as placed
 	ins->b = 1;
 	// add to graph
+	ins->prev = ins_last_placed;
 	ins_last_placed->next = ins;
 	ins_last_placed = ins;
 	return a;
@@ -656,6 +659,7 @@ Inst gen_func(Ast node) {
 
 	inst_label(label_get());
 
+	head.next->prev = nil;
 	return head.next;
 }
 
@@ -673,8 +677,11 @@ bool inst_is_cond_branch(Inst ins) {
 }
 
 
-// dispose of an instruction (must have been removed from graph)
-void opt_inst_destroy(Inst ins) {
+// dispose of an instruction
+// - removes from graph
+// - adjusts refcount for target label if a branch op
+// - DOES NO HOUSEKEEPING for labels (remove at your own risk)
+Inst opt_inst_destroy(Inst ins) {
 	u32 op = ins->op & INS_OP_MASK;
 	if ((op >= INS_B) && (op <= INS_BGE)) {
 		Inst tgt = label_idx[ins->a];
@@ -682,8 +689,18 @@ void opt_inst_destroy(Inst ins) {
 		tgt->c --;
 	}
 	ins->op = INS_DEAD;
+
+	Inst next = ins->next;
+	Inst prev = ins->prev;
+
+	next->prev = prev;
+	prev->next = next;
+
 	ins->next = nil;
+	ins->prev = nil;
+
 	free(ins);
+	return next;
 }
 
 // clean up messes leftover from code generation
@@ -694,20 +711,18 @@ void opt_inst_destroy(Inst ins) {
 //   if such a label does not already exist
 // - remove code between unconditional branches and labels
 void opt_func_label_cleanup(Inst first, Inst last) {
-	Inst prev = first;
+	// skip the global label and start with the local label L0
 	Inst ins = first->next;
 	while (ins != last) {
 		if (inst_is_uncond_branch(ins) && !inst_is_label(ins->next)) {
 			// any code between an uncond branch and a label is dead
-			Inst dead = ins->next;
-			ins->next = dead->next;
-			opt_inst_destroy(dead);
+			opt_inst_destroy(ins->next);
 			continue;
 		}
 		if (inst_is_uncond_branch(ins)) {
 			// do we target a label between us and the next inst?
 			Inst x = ins->next;
-			Inst dead = nil;
+			bool remove = false;
 			// in case we've replaced its target, obtain the label
 			// id of the target via the label index table
 			i32 id = label_idx[ins->a]->a;
@@ -715,35 +730,32 @@ void opt_func_label_cleanup(Inst first, Inst last) {
 				if (x->a == id) {
 					// we're uncond jumping to an immediately
 					// following label.
-					dead = ins;
+					remove = true;
 					break;
 				}
 				x = x->next;
 			}
-			if (dead != nil) {
-				prev->next = dead->next;
-				ins = dead->next;
-				opt_inst_destroy(dead);
+			if (remove) {
+				ins = opt_inst_destroy(ins);
 				continue;
 			}
 		}
 		if (inst_is_label(ins)) {
-			if ((ins->c == 0) && !(inst_is_cond_branch(prev))) {
+			if ((ins->c == 0) && !(inst_is_cond_branch(ins->prev))) {
 				// nobody jumps here
 				// mark label as unused? remove from idx?
-				prev->next = ins->next;
-				ins = ins->next;
+				ins = opt_inst_destroy(ins);
 				continue;
 			}
-			if (inst_is_label(prev)) {
+			if (inst_is_label(ins->prev)) {
 				// if prev was also a label, merge with it...
 				// 1. acquire its refcount
-				prev->c += ins->c;
+				ins->prev->c += ins->c;
 				// 2. acquire its slot (redirect all inbounds to us)
-				label_idx[prev->a] = ins;
-				// 3. remove from instruction stream (delete?)
-				prev->next = ins->next;
-				ins = ins->next;
+				label_idx[ins->prev->a] = ins;
+				// 3. remove from instruction stream
+				ins->op = INS_DEAD;
+				ins = opt_inst_destroy(ins);
 				continue;
 			}
 		}
@@ -753,9 +765,9 @@ void opt_func_label_cleanup(Inst first, Inst last) {
 			ins_last_placed = ins;
 			inst_label(label_get());
 			ins_last_placed->next = next;
+			next->prev = ins_last_placed;
 		}
 		ins = ins->next;
-		prev = prev->next;
 	}
 }
 
@@ -779,10 +791,11 @@ void gen_program(Ast node) {
 	node = node->c2;
 	while (node != nil) {
 		if (node->kind == AST_FUNC) {
-			Inst ins = gen_func(node);
-			dis_func(stderr, ins);
-			opt_func(node, ins->next, ins_last_placed);
-			dis_func(stderr, ins);
+			Inst first = gen_func(node);
+			Inst last = ins_last_placed;
+			dis_func(stderr, first);
+			opt_func(node, first->next, last);
+			dis_func(stderr, first);
 		}
 		node = node->c2;
 	}
