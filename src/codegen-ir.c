@@ -281,14 +281,21 @@ i32 gen_addr_expr(Ast node) {
 i32 gen_assign(Ast lhs, Ast expr) {
 	gen_trace("gen_assign()");
 
-	i32 raddr = gen_addr_expr(lhs);
+	i32 base;
+	i32 offset;
+	if (lhs->kind == AST_SYMBOL) {
+		sym_get_loc(lhs->sym, &base, &offset);
+	} else {
+		base = gen_addr_expr(lhs);
+		offset = 0;
+	}
 	i32 rval = gen_expr(expr);
 
 	if (lhs->type->size == 4) {
-		inst_stwi(rval, raddr, 0);
+		inst_stwi(rval, base, offset);
 		return rval;
 	} else if (lhs->type->size == 1) {
-		inst_stbi(rval, raddr, 0);
+		inst_stbi(rval, base, offset);
 		return rval;
 	} else {
 		err_ast = lhs;
