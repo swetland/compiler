@@ -67,6 +67,7 @@ i32 reg_get() {
 // table of labels
 i32 label_next = 0;
 Inst label_idx[1024];
+BBlock bb_idx[1024];
 
 Inst _inst_make(u32 op, i32 a, i32 b, i32 c) {
 	// add opcode-specific property bitflags to allow
@@ -675,6 +676,18 @@ Inst gen_func(Ast node) {
 
 void inst_disasm(FILE* fp, Inst ins);
 
+i32 bb_id_counter = 0;
+
+BBlock make_bblock(i32 pcount) {
+	i32 sz = sizeof(BBlockRec) + pcount * 4;
+	BBlock bb = malloc(sz);
+	memset(bb, 0, sz);
+	//bb->pcount = pcount;
+	bb->id = bb_id_counter;
+	bb_id_counter++;
+	return bb;
+}
+
 bool inst_is_label(Inst ins) {
 	return ins->op & INF_IS_LABEL;
 }
@@ -724,7 +737,7 @@ Inst opt_inst_destroy(Inst ins) {
 // - insert labels after flow control departures from straightline
 //   if such a label does not already exist
 // - remove code between unconditional branches and labels
-void opt_func_label_cleanup(Inst first, Inst last) {
+BBlock opt_func_label_cleanup(Inst first, Inst last) {
 	// skip the global label and start with the local label L0
 	Inst ins = first->next;
 	while (ins != last) {
@@ -757,7 +770,8 @@ void opt_func_label_cleanup(Inst first, Inst last) {
 		if (inst_is_label(ins)) {
 			if ((ins->c == 0) && !(inst_is_cond_branch(ins->prev))) {
 				// nobody jumps here
-				// mark label as unused? remove from idx?
+				// remove label
+				label_idx[ins->a] = nil;
 				ins = opt_inst_destroy(ins);
 				continue;
 			}
@@ -781,21 +795,141 @@ void opt_func_label_cleanup(Inst first, Inst last) {
 			ins_last_placed->next = next;
 			next->prev = ins_last_placed;
 		}
+		if (inst_is_return(ins)) {
+			// returns are treated as B Llast
+			// from a flow-control standpoint
+			last->c++;
+		}
 		ins = ins->next;
 	}
+
+	// for each non-redirected label, create a basic block
+	// sized for the max possible inbound edges of that label
+	i32 n = 0;
+	BBlock bblast = nil;
+	while (n < label_next) {
+		if ((label_idx[n] != nil) && (label_idx[n]->a == n)) {
+			BBlock bb = make_bblock(label_idx[n]->c + 1);
+			bb_idx[n] = bb;
+			bb_idx[n]->first = label_idx[n];
+			if (bblast != nil) {
+				bblast->list = bb;
+			}
+			bblast = bb;
+		} else {
+			bb_idx[n] = nil;
+		}
+		n++;
+	}
+
+	// For each branch instruction, fixup any indirections
+	// so they point at their true target label.
+	// Hook up prev[] and next[] pointers between bblocks
+	ins = first->next;
+	BBlock bb = bb_idx[0];
+	bb->flags |= BB_FIRST;
+	while (ins != nil) {
+		if (inst_is_label(ins)) {
+			bb->last = ins;
+			BBlock nextbb = bb_idx[ins->a];
+			// if control flows from previous instruction
+			// (last in prev bb) to this one, bidirectionally
+			// link us
+			if (!inst_is_uncond_branch(ins->prev) &&
+			    !inst_is_return(ins->prev)) {
+				nextbb->prev[nextbb->pcount] = bb;
+				nextbb->pcount++;
+				if (bb->next[0] == nil) {
+					bb->next[0] = nextbb;
+				} else {
+					bb->next[1] = nextbb;
+				}
+			}
+			bb = nextbb;
+		} else if (inst_is_branch(ins)) {
+			Inst target = label_idx[ins->a];
+			if (ins->a != target->a) {
+				// we've been redirected, let's fix up
+				ins->a = target->a;
+			}
+			BBlock tbb = bb_idx[target->a];
+
+			// we're branching from bb to tbb
+			tbb->prev[tbb->pcount] = bb;
+			tbb->pcount++;
+			if (bb->next[0] == nil) {
+				bb->next[0] = tbb;
+			} else {
+				bb->next[1] = tbb;
+			}
+		} else if (inst_is_return(ins)) {
+			BBlock tbb = bb_idx[last->a];
+
+			// return is like a branch to the last label/bb
+			tbb->prev[tbb->pcount] = bb;
+			tbb->pcount++;
+			if (bb->next[0] == nil) {
+				bb->next[0] = tbb;
+			} else {
+				bb->next[1] = tbb;
+			}
+		}
+		ins = ins->next;
+	}
+
+	bb->flags |= BB_LAST;
+
+	// first bb has pcount 0 but prev[0] points to last for convenience
+	bb_idx[0]->prev[0] = bb;
+	return bb_idx[0];
 }
 
-void opt_func(Ast node, Inst first, Inst last) {
-	opt_func_label_cleanup(first, last);
+BBlock opt_func(Ast node, Inst first, Inst last) {
+	BBlock bblist = opt_func_label_cleanup(first, last);
+	return bblist;
 }
+
 
 void dis_func(FILE* fp, Inst ins, str name) {
-	fprintf(stderr,"\n------------------\n");
-	fprintf(stderr,"@%s:\n", name);
+	fprintf(fp,"@%s:\n", name);
 	while (ins != nil) {
-		inst_disasm(stderr, ins);
+		inst_disasm(fp, ins);
 		ins = ins->next;
 	}
+}
+
+void graph_func(FILE* fp, str fn, BBlock blocks) {
+	fprintf(fp,
+		"digraph g {\n"
+		"graph [ rankdir=TB; ];\n"
+		"node [ shape=plain; ];\n");
+	BBlock bb = blocks;
+	while (bb != nil) {
+		fprintf(fp, "\"%p\" [ label=<<TABLE BORDER=\"0\" CELLBORDER=\"1\" CELLSPACING=\"0\">\n", bb);
+		Inst ins = bb->first;
+		if (bb == blocks) {
+			fprintf(fp,"<TR><TD BGCOLOR=\"gray\" ALIGN=\"left\">@%s:</TD></TR>\n", fn);
+		}
+		while (ins != bb->last) {
+			if (inst_is_label(ins)) {
+				fprintf(fp,"<TR><TD BGCOLOR=\"gray\" ALIGN=\"left\">");
+			} else {
+				fprintf(fp,"<TR><TD ALIGN=\"left\">");
+			}
+			inst_disasm(fp, ins);
+			fprintf(fp,"</TD></TR>\n");
+			ins = ins->next;
+		}
+		fprintf(fp, "</TABLE>>; ];\n");
+		if (bb->next[0]) {
+			fprintf(fp, "\"%p\" -> \"%p\" [ ];\n", bb, bb->next[0]);
+		}
+		if (bb->next[1]) {
+			fprintf(fp, "\"%p\" -> \"%p\" [ ];\n", bb, bb->next[1]);
+		}
+		bb = bb->list;
+	}
+	fprintf(fp, "}\n");
 }
 
 void gen_program(Ast node) {
@@ -806,11 +940,29 @@ void gen_program(Ast node) {
 	node = node->c2;
 	while (node != nil) {
 		if (node->kind == AST_FUNC) {
+			str fn = node->sym->name->text;
 			Inst first = gen_func(node);
 			Inst last = ins_last_placed;
-			dis_func(stderr, first, node->sym->name->text);
-			opt_func(node, first, last);
-			dis_func(stderr, first, node->sym->name->text);
+			char tmp[256];
+			sprintf(tmp, "debug/%s.ast.ir", fn);
+			FILE* fp = fopen(tmp, "w");
+			if (fp != nil) {
+				dis_func(fp, first, fn);
+				fclose(fp);
+			}
+			BBlock bblocks = opt_func(node, first, last);
+			sprintf(tmp, "debug/%s.bb.ir", fn);
+			fp = fopen(tmp, "w");
+			if (fp != nil) {
+				dis_func(fp, first, fn);
+				fclose(fp);
+			}
+			sprintf(tmp, "debug/%s.bb.dot", fn);
+			fp = fopen(tmp, "w");
+			if (fp != nil) {
+				graph_func(fp, fn, bblocks);
+				fclose(fp);
+			}
 		}
 		node = node->c2;
 	}
@@ -852,14 +1004,14 @@ void inst_disasm(FILE* fp, Inst ins) {
 	//fprintf(fp, "(%08x %08x %08x %08x)\n", ins->op, ins->a, ins->b, ins->c);
 	if (op == INS_LABEL) {
 		prlabel(fp, ins->a);
-		fprintf(fp, ": // count=%u", ins->c);
+		fprintf(fp, ":"); // count=%u", ins->c);
 	} else if (op == INS_MOV) {
 		fprintf(fp, "\tmov ");
 		prreg(fp, ins->a);
 		fprintf(fp, ", ");
 		prarg(fp, ins->c, ins->op);
 	} else if ((op == INS_LD) || (op == INS_ST)) {
-		str sz = isz_name[(ins->op & INF_SZ_MASK) >> 8];
+		str sz = isz_name[(ins->op & INF_SZ_MASK) >> INF_SZ_SHIFT];
 		fprintf(fp, "\t%s%s ", ins_name[op], sz);
 		prreg(fp, ins->a);
 		fprintf(fp, ", [");
@@ -885,10 +1037,10 @@ void inst_disasm(FILE* fp, Inst ins) {
 		fprintf(fp, ", ");
 		prarg(fp, ins->c, ins->op);
 	} else if (op == INS_CALL) {
-		fprintf(stderr, "\tcall ");
+		fprintf(fp, "\tcall ");
 		prlabel(fp, ins->a);
 	} else if (op == INS_RET) {
-		fprintf(stderr, "\tret ");
+		fprintf(fp, "\tret ");
 		prreg(fp, ins->a);
 	} else {
 		fprintf(fp, "\tinval 0x%x", ins->op);

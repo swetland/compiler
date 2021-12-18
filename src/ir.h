@@ -10,6 +10,7 @@ enum {
 	INF_SZ_U16 =   0x0040,
 	INF_SZ_U32 =   0x0080,
 	INF_SZ_MASK =  0x00C0,
+	INF_SZ_SHIFT = 6,
 
 	// property bits
 	INF_IS_B_UC  = 0x0200, // is uncondition branch
@@ -85,7 +86,9 @@ str isz_name[4] = {
 };
 
 typedef struct InstRec InstRec;
+typedef struct BBlockRec BBlockRec;
 typedef struct InstRec* Inst;
+typedef struct BBlockRec* BBlock;
 
 struct InstRec {
 	Inst next;
@@ -94,4 +97,21 @@ struct InstRec {
 	i32 a;
 	i32 b;
 	i32 c;
+};
+
+enum {
+	BB_FIRST = 0x0001,
+	BB_LAST = 0x0002,
+};
+
+struct BBlockRec {
+	Inst first;
+	Inst last;
+	i32 flags;
+	i32 id;
+
+	i32 pcount;
+	BBlock list;
+	BBlock next[2];
+	BBlock prev[0];
 };
