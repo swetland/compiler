@@ -28,7 +28,7 @@ bin/cast: src/compiler2.c src/codegen-risc5-simple.c src/risc5dis.c out/risc5ins
 	@mkdir -p bin
 	$(CC) -o $@ $(CFLAGS) -Wno-unused-result -DC src/compiler2.c src/risc5dis.c
 
-bin/cir: src/compiler2.c src/codegen-ir.c src/risc5dis.c out/risc5ins.h
+bin/cir: src/compiler2.c src/codegen-ir.c src/risc5dis.c out/risc5ins.h src/ir.h
 	@mkdir -p bin
 	$(CC) -o $@ $(CFLAGS) -Wno-unused-result -DIR -DC src/compiler2.c src/risc5dis.c
 

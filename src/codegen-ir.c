@@ -69,6 +69,10 @@ i32 label_next = 0;
 Inst label_idx[1024];
 
 Inst _inst_make(u32 op, i32 a, i32 b, i32 c) {
+	// add opcode-specific property bitflags to allow
+	// for quick property testing
+	op |= ins_props[op & INS_OP_MASK];
+
 	Inst ins = malloc(sizeof(InstRec));
 	ins->next = nil;
 	ins->prev = nil;
@@ -634,14 +638,13 @@ Inst gen_func(Ast node) {
 	reg_next = REG_VIRT_0;
 	label_next = 0;
 
-	inst_label_global(node->sym->name->text);
+	inst_label(label_get());
 	Inst first = ins_last_placed;
 
 	// local space plus saved lr and fp
 	u32 x = node->sym->type->size + 8;
 
 	// generate prologue
-	inst_label(label_get());
 #if 0
 	node->sym->value = ctx.pc;
 	node->sym->flags |= SYM_IS_PLACED;
@@ -673,16 +676,20 @@ Inst gen_func(Ast node) {
 void inst_disasm(FILE* fp, Inst ins);
 
 bool inst_is_label(Inst ins) {
-	return (ins->op & INS_OP_MASK) == INS_LABEL;
+	return ins->op & INF_IS_LABEL;
 }
 bool inst_is_uncond_branch(Inst ins) {
-	return (ins->op & INS_OP_MASK) == INS_B;
+	return ins->op & INF_IS_B_UC;
 }
 bool inst_is_cond_branch(Inst ins) {
-	u32 oc = ins->op & INS_OP_MASK;
-	return (oc >= INS_BEQ) && (oc <= INS_BGE);
+	return ins->op & INF_IS_B_CC;
 }
-
+bool inst_is_branch(Inst ins) {
+	return ins->op & INF_IS_B;
+}
+bool inst_is_return(Inst ins) {
+	return ins->op & INF_IS_RET;
+}
 
 // dispose of an instruction
 // - removes from graph
@@ -690,7 +697,7 @@ bool inst_is_cond_branch(Inst ins) {
 // - DOES NO HOUSEKEEPING for labels (remove at your own risk)
 Inst opt_inst_destroy(Inst ins) {
 	u32 op = ins->op & INS_OP_MASK;
-	if ((op >= INS_B) && (op <= INS_BGE)) {
+	if (inst_is_branch(ins)) {
 		Inst tgt = label_idx[ins->a];
 		// decrement inbound count on branch target
 		tgt->c --;
@@ -782,8 +789,9 @@ void opt_func(Ast node, Inst first, Inst last) {
 	opt_func_label_cleanup(first, last);
 }
 
-void dis_func(FILE* fp, Inst ins) {
+void dis_func(FILE* fp, Inst ins, str name) {
 	fprintf(stderr,"\n------------------\n");
+	fprintf(stderr,"@%s:\n", name);
 	while (ins != nil) {
 		inst_disasm(stderr, ins);
 		ins = ins->next;
@@ -800,9 +808,9 @@ void gen_program(Ast node) {
 		if (node->kind == AST_FUNC) {
 			Inst first = gen_func(node);
 			Inst last = ins_last_placed;
-			dis_func(stderr, first);
-			opt_func(node, first->next, last);
-			dis_func(stderr, first);
+			dis_func(stderr, first, node->sym->name->text);
+			opt_func(node, first, last);
+			dis_func(stderr, first, node->sym->name->text);
 		}
 		node = node->c2;
 	}
