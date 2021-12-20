@@ -1,0 +1,23 @@
+
+func fib(n i32) i32 {
+	var a i32 = 0;
+	var b i32 = 1;
+	var z i32 = 0;
+	while (n != z) {
+		var t i32 = a + b;
+		a = b;
+		b = t;
+		n = n - 1;
+		z = 0;
+	}
+	return a;
+}
+
+func start() i32 {
+	var n i32 = 0;
+	while n < 24 {
+		_hexout_(fib(n));
+		n++;
+	}
+	return 7;
+}

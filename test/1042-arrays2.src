@@ -1,0 +1,16 @@
+
+var data [8]byte;
+
+func start() i32 {
+	var n i32 = 0;
+	while n < 8 {
+		data[n] = n << 4;
+		n++;
+	}
+	n = 0;
+	while n < 8 {
+		_hexout_(data[n]);
+		n++;
+	}
+	return n;
+}
