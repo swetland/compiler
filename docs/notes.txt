@@ -1,0 +1,96 @@
+
+Tracking Source Location
+------------------------
+LLVM Source Location is u32
+- "sourcemanager" assigns files into global offset space
+- high bit == macro expansion (separate space)
+- 0 = invalid (errors not related to source like command line options)
+
+
+Register Allocation
+-------------------
+aho 2e pdf p565  8.5 -- a simple code generator
+mogensen 2017 p130 -- simple IR
+
+Register Spilling and Live-Range Splitting for SSA-Form Programs
+Braun / Hack 2009
+- adapts furtherst-first algo to ssa use, no coloring needed
+
+Phys vs Virt Registers
+----------------------
+mogensen 2017 / 8.6.2 (p198pdf)
+- phys regs can be used "pre-colored" for instructions with
+  limitations, func call params, etc
+- "live range splitting" by inserting moves from colorless to pre-colored regs
+
+cmu compilers class 2018 / register selection lecture
+- similar comments re: special instructions, func calls, etc
+
+
+Live Analysis
+-------------
+torczon 2012  8.6.1 finding uninit vars w/ live info (p470pdf)
+LiveOut / UEVar / VarKill  iterative method
+
+mogenson 2017 8.2 liveness analysis (p188pdf)
+
+cmu compilers 2018 - 05-liveness-analysis.pdf
+
+
+Constant Folding
+----------------
+simple constant folding
+
+  *    ->  C(C1*C2)
+ / \
+C1  C2
+
+more complex const folding (various algebraic transforms, etc)
+
+  *   ->    *
+ / \       / \
+C1  *    V1   C(C1*C2)
+   / \
+  V1  C2
+
+
+Assorted Resources
+------------------
+https://groups.seas.harvard.edu/courses/cs153/2019fa/schedule.html
+https://blog.yossarian.net/2020/10/23/Understanding-static-single-assignment-forms
+https://lowlevelbits.org/how-to-learn-compilers-llvm-edition/
+
+Tiny Scheme / 5k repl
+---------------------
+http://www.iro.umontreal.ca/~feeley/papers/YvonFeeleyVMIL21.pdf
+https://github.com/udem-dlteam/ribbit
+
+
+Code Snippets
+-------------
+
+int fib(int n) {
+    int a = 0;
+    int b = 1;
+    int z = 0;
+    while (n != z) {
+        int t = a + b;
+        a = b;
+        b = t;
+        n = n - 1;
+        z = 0;
+    }
+    return a;
+}
+
+int gcd(int x1, int x2) {
+    while (x2 != 0) {
+        int q = x1 / x2;
+        int t = q * x2;
+        int r = x1 - t;
+        x1 = x2;
+        x2 = r;
+    }
+    return x1;
+}
+
